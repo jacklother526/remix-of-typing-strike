@@ -1,9 +1,15 @@
 {
   "stage": 1,
-  "spawnIntervalMs": 1400,
-  "enemySpeed": 38,
-  "bulletSpeed": 1400,
+  "spawnIntervalMs": 1500,
+  "enemySpeedMin": 28,
+  "enemySpeedMax": 70,
+  "bulletSpeedBase": 1100,
+  "bulletSpeedGrowthPerSec": 18,
+  "bulletSpeedMax": 2600,
+  "bulletJitter": 0.15,
   "letters": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
   "playerHealth": 100,
-  "enemyDamage": 10
+  "enemyDamage": 10,
+  "obstacleCount": 14,
+  "pathWidth": 56
 }
