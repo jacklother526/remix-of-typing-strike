@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import config from "@/lib/game-config.json";
 
+type Vec = { x: number; y: number };
+
 type Enemy = {
   id: number;
+  pathIdx: number;
+  t: number; // distance traveled along path
   x: number;
   y: number;
   letter: string;
@@ -19,6 +23,7 @@ type Bullet = {
   vy: number;
   targetId: number;
   life: number;
+  speed: number;
 };
 
 type Particle = {
@@ -32,12 +37,19 @@ type Particle = {
   size: number;
 };
 
+type Obstacle = { x: number; y: number; r: number; hp: number };
+
 type MuzzleFlash = { angle: number; life: number };
+
+type Path = {
+  points: Vec[];     // waypoints
+  cum: number[];     // cumulative lengths
+  total: number;
+};
 
 let _id = 1;
 const nextId = () => _id++;
 
-// Tiny audio synth — no assets needed
 function useAudio() {
   const ctxRef = useRef<AudioContext | null>(null);
   const ensure = () => {
@@ -55,13 +67,12 @@ function useAudio() {
       const o = ctx.createOscillator();
       const g = ctx.createGain();
       o.type = "square";
-      o.frequency.setValueAtTime(880, t);
-      o.frequency.exponentialRampToValueAtTime(120, t + 0.08);
-      g.gain.setValueAtTime(0.18, t);
-      g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      o.frequency.setValueAtTime(980, t);
+      o.frequency.exponentialRampToValueAtTime(110, t + 0.07);
+      g.gain.setValueAtTime(0.2, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
       o.connect(g).connect(ctx.destination);
-      o.start(t);
-      o.stop(t + 0.1);
+      o.start(t); o.stop(t + 0.09);
     },
     boom: () => {
       const ctx = ensure();
@@ -76,8 +87,7 @@ function useAudio() {
       g.gain.setValueAtTime(0.35, t);
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
       const f = ctx.createBiquadFilter();
-      f.type = "lowpass";
-      f.frequency.value = 1200;
+      f.type = "lowpass"; f.frequency.value = 1200;
       src.connect(f).connect(g).connect(ctx.destination);
       src.start(t);
     },
@@ -92,10 +102,81 @@ function useAudio() {
       g.gain.setValueAtTime(0.12, t);
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.13);
       o.connect(g).connect(ctx.destination);
-      o.start(t);
-      o.stop(t + 0.14);
+      o.start(t); o.stop(t + 0.14);
+    },
+    thud: () => {
+      const ctx = ensure();
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "triangle";
+      o.frequency.setValueAtTime(220, t);
+      o.frequency.exponentialRampToValueAtTime(60, t + 0.08);
+      g.gain.setValueAtTime(0.1, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+      o.connect(g).connect(ctx.destination);
+      o.start(t); o.stop(t + 0.1);
     },
   };
+}
+
+// Build a curvy path from an edge point to the center
+function buildPath(start: Vec, end: Vec, seed: number): Path {
+  const points: Vec[] = [start];
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dist = Math.hypot(dx, dy);
+  const steps = 6;
+  // perpendicular unit
+  const nx = -dy / dist;
+  const ny = dx / dist;
+  let s = seed;
+  const rand = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+  for (let i = 1; i < steps; i++) {
+    const t = i / steps;
+    const baseX = start.x + dx * t;
+    const baseY = start.y + dy * t;
+    // taper offset near ends so path actually reaches start/end
+    const taper = Math.sin(t * Math.PI);
+    const off = (rand() - 0.5) * 280 * taper;
+    points.push({ x: baseX + nx * off, y: baseY + ny * off });
+  }
+  points.push(end);
+  // cumulative lengths
+  const cum: number[] = [0];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    total += Math.hypot(points[i].x - points[i - 1].x, points[i].y - points[i - 1].y);
+    cum.push(total);
+  }
+  return { points, cum, total };
+}
+
+function pointOnPath(path: Path, t: number): Vec {
+  if (t <= 0) return path.points[0];
+  if (t >= path.total) return path.points[path.points.length - 1];
+  // find segment
+  let i = 1;
+  while (i < path.cum.length && path.cum[i] < t) i++;
+  const segLen = path.cum[i] - path.cum[i - 1];
+  const f = (t - path.cum[i - 1]) / segLen;
+  const a = path.points[i - 1], b = path.points[i];
+  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
+}
+
+// segment-circle intersection (for bullet vs obstacle and bullet vs enemy quick test)
+function segCircleHit(x1: number, y1: number, x2: number, y2: number, cx: number, cy: number, r: number): boolean {
+  const dx = x2 - x1, dy = y2 - y1;
+  const fx = x1 - cx, fy = y1 - cy;
+  const a = dx * dx + dy * dy;
+  const b = 2 * (fx * dx + fy * dy);
+  const c = fx * fx + fy * fy - r * r;
+  let disc = b * b - 4 * a * c;
+  if (disc < 0) return false;
+  disc = Math.sqrt(disc);
+  const t1 = (-b - disc) / (2 * a);
+  const t2 = (-b + disc) / (2 * a);
+  return (t1 >= 0 && t1 <= 1) || (t2 >= 0 && t2 <= 1);
 }
 
 export default function TypingTowerGame() {
@@ -103,12 +184,16 @@ export default function TypingTowerGame() {
   const enemiesRef = useRef<Enemy[]>([]);
   const bulletsRef = useRef<Bullet[]>([]);
   const particlesRef = useRef<Particle[]>([]);
+  const obstaclesRef = useRef<Obstacle[]>([]);
+  const pathsRef = useRef<Path[]>([]);
   const muzzleRef = useRef<MuzzleFlash | null>(null);
   const turretAngleRef = useRef(-Math.PI / 2);
+  const targetAngleRef = useRef(-Math.PI / 2);
   const recoilRef = useRef(0);
   const sizeRef = useRef({ w: 1280, h: 720 });
   const lastSpawnRef = useRef(0);
   const lastTimeRef = useRef(performance.now());
+  const elapsedRef = useRef(0);
   const comboRef = useRef(0);
   const healthRef = useRef(config.playerHealth);
   const gameOverRef = useRef(false);
@@ -118,6 +203,50 @@ export default function TypingTowerGame() {
   const [hudCombo, setHudCombo] = useState(0);
   const [hudHealth, setHudHealth] = useState(config.playerHealth);
   const [gameOver, setGameOver] = useState(false);
+
+  const buildLevel = () => {
+    const { w, h } = sizeRef.current;
+    const cx = w / 2, cy = h / 2;
+    // 4 paths from 4 edges
+    const starts: Vec[] = [
+      { x: w * 0.1, y: -20 },
+      { x: w + 20, y: h * 0.2 },
+      { x: w * 0.85, y: h + 20 },
+      { x: -20, y: h * 0.75 },
+    ];
+    pathsRef.current = starts.map((s, i) => buildPath(s, { x: cx, y: cy }, (i + 1) * 7919 + Math.floor(Math.random() * 9999)));
+
+    // Obstacles — keep away from turret and away from path centerlines (close enough to be in shooting lanes but not blocking the road)
+    const obs: Obstacle[] = [];
+    let tries = 0;
+    const minTurret = 110;
+    while (obs.length < config.obstacleCount && tries < 400) {
+      tries++;
+      const x = 60 + Math.random() * (w - 120);
+      const y = 60 + Math.random() * (h - 120);
+      if (Math.hypot(x - cx, y - cy) < minTurret) continue;
+      // not directly on a path centerline (still possible to be near edges of road)
+      let onPath = false;
+      for (const p of pathsRef.current) {
+        for (let i = 1; i < p.points.length; i++) {
+          const a = p.points[i - 1], b = p.points[i];
+          // distance from point to segment
+          const vx = b.x - a.x, vy = b.y - a.y;
+          const wx = x - a.x, wy = y - a.y;
+          const segL2 = vx * vx + vy * vy;
+          const tt = Math.max(0, Math.min(1, (wx * vx + wy * vy) / segL2));
+          const px = a.x + vx * tt, py = a.y + vy * tt;
+          if (Math.hypot(x - px, y - py) < 18) { onPath = true; break; }
+        }
+        if (onPath) break;
+      }
+      if (onPath) continue;
+      // not too close to other obstacles
+      if (obs.some(o => Math.hypot(o.x - x, o.y - y) < 70)) continue;
+      obs.push({ x, y, r: 6 + Math.random() * 4, hp: 3 });
+    }
+    obstaclesRef.current = obs;
+  };
 
   // Resize
   useEffect(() => {
@@ -131,94 +260,102 @@ export default function TypingTowerGame() {
       const ctx = c.getContext("2d")!;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       sizeRef.current = { w, h };
+      if (pathsRef.current.length === 0) buildLevel();
     };
     resize();
     window.addEventListener("resize", resize);
     return () => window.removeEventListener("resize", resize);
   }, []);
 
-  // Spawn helper
   const spawnEnemy = () => {
-    const { w, h } = sizeRef.current;
-    const side = Math.floor(Math.random() * 4);
-    let x = 0, y = 0;
-    if (side === 0) { x = Math.random() * w; y = -30; }
-    else if (side === 1) { x = w + 30; y = Math.random() * h; }
-    else if (side === 2) { x = Math.random() * w; y = h + 30; }
-    else { x = -30; y = Math.random() * h; }
+    if (pathsRef.current.length === 0) return;
+    const pi = Math.floor(Math.random() * pathsRef.current.length);
+    const p = pathsRef.current[pi];
+    const start = p.points[0];
     const letters = config.letters;
-    // avoid duplicate active letters
-    const taken = new Set(enemiesRef.current.map(e => e.letter));
-    let letter = letters[Math.floor(Math.random() * letters.length)];
-    let tries = 0;
-    while (taken.has(letter) && tries < 30) {
-      letter = letters[Math.floor(Math.random() * letters.length)];
-      tries++;
-    }
-    if (taken.has(letter)) return; // skip this spawn
+    const letter = letters[Math.floor(Math.random() * letters.length)];
+    const speed = config.enemySpeedMin + Math.random() * (config.enemySpeedMax - config.enemySpeedMin);
     enemiesRef.current.push({
       id: nextId(),
-      x, y,
+      pathIdx: pi,
+      t: 0,
+      x: start.x,
+      y: start.y,
       letter,
       hp: 1,
-      speed: config.enemySpeed + Math.random() * 12,
+      speed,
       radius: 18,
     });
   };
 
-  // Explosion
   const explode = (x: number, y: number) => {
-    for (let i = 0; i < 22; i++) {
+    for (let i = 0; i < 24; i++) {
       const a = Math.random() * Math.PI * 2;
-      const s = 80 + Math.random() * 220;
+      const s = 80 + Math.random() * 240;
       particlesRef.current.push({
         x, y,
-        vx: Math.cos(a) * s,
-        vy: Math.sin(a) * s,
-        life: 0.5 + Math.random() * 0.3,
-        maxLife: 0.8,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life: 0.5 + Math.random() * 0.3, maxLife: 0.8,
         color: Math.random() < 0.5 ? "#ffb347" : "#ff5722",
         size: 2 + Math.random() * 3,
       });
     }
     for (let i = 0; i < 10; i++) {
       const a = Math.random() * Math.PI * 2;
-      const s = 30 + Math.random() * 80;
       particlesRef.current.push({
         x, y,
-        vx: Math.cos(a) * s,
-        vy: Math.sin(a) * s,
-        life: 0.6,
-        maxLife: 0.6,
-        color: "#555",
-        size: 4 + Math.random() * 4,
+        vx: Math.cos(a) * (30 + Math.random() * 80),
+        vy: Math.sin(a) * (30 + Math.random() * 80),
+        life: 0.6, maxLife: 0.6,
+        color: "#555", size: 4 + Math.random() * 4,
       });
     }
   };
 
-  // Fire bullet at enemy
+  const sparks = (x: number, y: number) => {
+    for (let i = 0; i < 8; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 60 + Math.random() * 140;
+      particlesRef.current.push({
+        x, y,
+        vx: Math.cos(a) * s, vy: Math.sin(a) * s,
+        life: 0.25, maxLife: 0.25,
+        color: "#ffd966", size: 1.5 + Math.random() * 1.5,
+      });
+    }
+  };
+
+  const currentBulletSpeed = () => {
+    const v = config.bulletSpeedBase + elapsedRef.current * config.bulletSpeedGrowthPerSec;
+    return Math.min(v, config.bulletSpeedMax);
+  };
+
   const fireAt = (enemy: Enemy) => {
     const { w, h } = sizeRef.current;
     const cx = w / 2, cy = h / 2;
     const dx = enemy.x - cx;
     const dy = enemy.y - cy;
     const len = Math.hypot(dx, dy) || 1;
-    const speed = comboRef.current >= 10 ? config.bulletSpeed * 1.4 : config.bulletSpeed;
+    const base = currentBulletSpeed();
+    const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
+    const speed = base * jitter;
+    const ang = Math.atan2(dy, dx);
     bulletsRef.current.push({
       id: nextId(),
       x: cx, y: cy,
       vx: (dx / len) * speed,
       vy: (dy / len) * speed,
       targetId: enemy.id,
-      life: 1.2,
+      life: 1.5,
+      speed,
     });
-    turretAngleRef.current = Math.atan2(dy, dx);
-    recoilRef.current = 6;
-    muzzleRef.current = { angle: Math.atan2(dy, dx), life: 0.08 };
+    // Turret rotates on fire only
+    targetAngleRef.current = ang;
+    recoilRef.current = 8;
+    muzzleRef.current = { angle: ang, life: 0.08 };
     audio.shot();
   };
 
-  // Keyboard
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (gameOverRef.current) {
@@ -227,7 +364,6 @@ export default function TypingTowerGame() {
       }
       const k = e.key.toUpperCase();
       if (k.length !== 1 || !/[A-Z]/.test(k)) return;
-      // find closest enemy with matching letter
       const { w, h } = sizeRef.current;
       const cx = w / 2, cy = h / 2;
       let target: Enemy | null = null;
@@ -257,14 +393,15 @@ export default function TypingTowerGame() {
     bulletsRef.current = [];
     particlesRef.current = [];
     comboRef.current = 0;
+    elapsedRef.current = 0;
     healthRef.current = config.playerHealth;
     gameOverRef.current = false;
     setHudCombo(0);
     setHudHealth(config.playerHealth);
     setGameOver(false);
+    buildLevel();
   };
 
-  // Main loop
   useEffect(() => {
     let raf = 0;
     const loop = (now: number) => {
@@ -272,6 +409,7 @@ export default function TypingTowerGame() {
       lastTimeRef.current = now;
 
       if (!gameOverRef.current) {
+        elapsedRef.current += dt;
         lastSpawnRef.current += dt * 1000;
         if (lastSpawnRef.current > config.spawnIntervalMs) {
           lastSpawnRef.current = 0;
@@ -282,23 +420,24 @@ export default function TypingTowerGame() {
       const { w, h } = sizeRef.current;
       const cx = w / 2, cy = h / 2;
 
-      // Update enemies — move toward center
+      // Move enemies along paths
       for (const en of enemiesRef.current) {
-        const dx = cx - en.x, dy = cy - en.y;
-        const d = Math.hypot(dx, dy) || 1;
-        en.x += (dx / d) * en.speed * dt;
-        en.y += (dy / d) * en.speed * dt;
+        en.t += en.speed * dt;
+        const p = pathsRef.current[en.pathIdx];
+        const pos = pointOnPath(p, en.t);
+        en.x = pos.x;
+        en.y = pos.y;
       }
 
-      // Enemy reaches turret
-      const turretR = 40;
+      // Enemy reaches turret (end of path)
       const survivors: Enemy[] = [];
       for (const en of enemiesRef.current) {
-        const d = Math.hypot(en.x - cx, en.y - cy);
-        if (d < turretR) {
+        const p = pathsRef.current[en.pathIdx];
+        if (en.t >= p.total - 4) {
           healthRef.current -= config.enemyDamage;
           setHudHealth(Math.max(0, healthRef.current));
           explode(en.x, en.y);
+          audio.thud();
           comboRef.current = 0;
           setHudCombo(0);
           if (healthRef.current <= 0 && !gameOverRef.current) {
@@ -311,37 +450,51 @@ export default function TypingTowerGame() {
       }
       enemiesRef.current = survivors;
 
-      // Update bullets
+      // Update bullets — sweep test against obstacles and enemies
       const aliveBullets: Bullet[] = [];
       for (const b of bulletsRef.current) {
-        b.x += b.vx * dt;
-        b.y += b.vy * dt;
+        const nx = b.x + b.vx * dt;
+        const ny = b.y + b.vy * dt;
         b.life -= dt;
-        let hit = false;
-        for (const en of enemiesRef.current) {
-          if (Math.hypot(en.x - b.x, en.y - b.y) < en.radius) {
-            en.hp -= 1;
-            if (en.hp <= 0) {
-              explode(en.x, en.y);
-              audio.boom();
-              enemiesRef.current = enemiesRef.current.filter(e => e.id !== en.id);
-            }
-            hit = true;
+        let consumed = false;
+
+        // obstacles
+        for (const o of obstaclesRef.current) {
+          if (segCircleHit(b.x, b.y, nx, ny, o.x, o.y, o.r + 2)) {
+            sparks(o.x, o.y);
+            o.hp -= 1;
+            consumed = true;
             break;
           }
         }
-        if (!hit && b.life > 0 && b.x > -50 && b.x < w + 50 && b.y > -50 && b.y < h + 50) {
+        if (!consumed) {
+          // enemies
+          for (const en of enemiesRef.current) {
+            if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
+              en.hp -= 1;
+              if (en.hp <= 0) {
+                explode(en.x, en.y);
+                audio.boom();
+                enemiesRef.current = enemiesRef.current.filter(e => e.id !== en.id);
+              }
+              consumed = true;
+              break;
+            }
+          }
+        }
+
+        b.x = nx; b.y = ny;
+        if (!consumed && b.life > 0 && b.x > -60 && b.x < w + 60 && b.y > -60 && b.y < h + 60) {
           aliveBullets.push(b);
         }
       }
       bulletsRef.current = aliveBullets;
+      obstaclesRef.current = obstaclesRef.current.filter(o => o.hp > 0);
 
-      // Update particles
+      // particles
       for (const p of particlesRef.current) {
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-        p.vx *= 0.92;
-        p.vy *= 0.92;
+        p.x += p.vx * dt; p.y += p.vy * dt;
+        p.vx *= 0.92; p.vy *= 0.92;
         p.life -= dt;
       }
       particlesRef.current = particlesRef.current.filter(p => p.life > 0);
@@ -352,21 +505,11 @@ export default function TypingTowerGame() {
       }
       if (recoilRef.current > 0) recoilRef.current = Math.max(0, recoilRef.current - dt * 40);
 
-      // Aim turret at nearest enemy
-      if (enemiesRef.current.length > 0) {
-        let nearest = enemiesRef.current[0];
-        let bestD = Infinity;
-        for (const en of enemiesRef.current) {
-          const d = Math.hypot(en.x - cx, en.y - cy);
-          if (d < bestD) { bestD = d; nearest = en; }
-        }
-        const targetAngle = Math.atan2(nearest.y - cy, nearest.x - cx);
-        // smooth rotate
-        let diff = targetAngle - turretAngleRef.current;
-        while (diff > Math.PI) diff -= Math.PI * 2;
-        while (diff < -Math.PI) diff += Math.PI * 2;
-        turretAngleRef.current += diff * Math.min(1, dt * 10);
-      }
+      // Smoothly rotate to last fire target (no auto-acquire)
+      let diff = targetAngleRef.current - turretAngleRef.current;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      turretAngleRef.current += diff * Math.min(1, dt * 18);
 
       draw();
       raf = requestAnimationFrame(loop);
@@ -376,11 +519,11 @@ export default function TypingTowerGame() {
       const c = canvasRef.current!;
       const ctx = c.getContext("2d")!;
       const { w, h } = sizeRef.current;
+      const cx = w / 2, cy = h / 2;
 
-      // Ground — gritty earth tone with grid
+      // Ground
       ctx.fillStyle = "#2a2620";
       ctx.fillRect(0, 0, w, h);
-      // sand/dirt patches
       ctx.fillStyle = "rgba(90, 75, 55, 0.25)";
       for (let i = 0; i < 6; i++) {
         const px = (i * 173) % w;
@@ -391,72 +534,99 @@ export default function TypingTowerGame() {
       }
       ctx.strokeStyle = "rgba(255,255,255,0.03)";
       ctx.lineWidth = 1;
-      const grid = 60;
-      for (let x = 0; x < w; x += grid) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-      }
-      for (let y = 0; y < h; y += grid) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+      for (let x = 0; x < w; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+      for (let y = 0; y < h; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+      // Paths (roads)
+      for (const p of pathsRef.current) {
+        // dark outline
+        ctx.strokeStyle = "#1a1612";
+        ctx.lineWidth = config.pathWidth + 6;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.beginPath();
+        ctx.moveTo(p.points[0].x, p.points[0].y);
+        for (let i = 1; i < p.points.length; i++) ctx.lineTo(p.points[i].x, p.points[i].y);
+        ctx.stroke();
+        // dirt fill
+        ctx.strokeStyle = "#5a4632";
+        ctx.lineWidth = config.pathWidth;
+        ctx.stroke();
+        // center scuff
+        ctx.strokeStyle = "rgba(0,0,0,0.18)";
+        ctx.lineWidth = 4;
+        ctx.setLineDash([14, 18]);
+        ctx.stroke();
+        ctx.setLineDash([]);
       }
 
-      const cx = w / 2, cy = h / 2;
+      // Obstacles (poles)
+      for (const o of obstaclesRef.current) {
+        ctx.fillStyle = "rgba(0,0,0,0.5)";
+        ctx.beginPath(); ctx.ellipse(o.x + 2, o.y + 4, o.r + 2, (o.r + 2) * 0.5, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#3a2e22";
+        ctx.beginPath(); ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "#1a1410";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        ctx.beginPath(); ctx.arc(o.x - o.r * 0.3, o.y - o.r * 0.3, o.r * 0.4, 0, Math.PI * 2); ctx.fill();
+      }
 
-      // Bullets — bright core + fading trail
+      // Bullets — tracer with strong glow + length scaling with speed
       for (const b of bulletsRef.current) {
-        const len = 18;
-        const tx = b.x - (b.vx / 1400) * len;
-        const ty = b.y - (b.vy / 1400) * len;
+        const len = Math.min(34, 10 + b.speed / 70);
+        const ux = b.vx / b.speed, uy = b.vy / b.speed;
+        const tx = b.x - ux * len, ty = b.y - uy * len;
+        // outer glow
+        ctx.strokeStyle = "rgba(255,180,80,0.35)";
+        ctx.lineWidth = 7;
+        ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+        // bright core
         const grad = ctx.createLinearGradient(tx, ty, b.x, b.y);
         grad.addColorStop(0, "rgba(255,220,120,0)");
-        grad.addColorStop(1, "rgba(255,240,180,1)");
+        grad.addColorStop(1, "rgba(255,255,220,1)");
         ctx.strokeStyle = grad;
         ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.moveTo(tx, ty);
-        ctx.lineTo(b.x, b.y);
-        ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
+        // head
         ctx.fillStyle = "#fffbe6";
-        ctx.beginPath();
-        ctx.arc(b.x, b.y, 2.5, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.lineCap = "butt";
       }
 
       // Enemies
       for (const en of enemiesRef.current) {
-        // shadow
         ctx.fillStyle = "rgba(0,0,0,0.4)";
         ctx.beginPath();
         ctx.ellipse(en.x + 3, en.y + 5, en.radius, en.radius * 0.6, 0, 0, Math.PI * 2);
         ctx.fill();
-        // body
-        ctx.fillStyle = "#5a6b3a";
-        ctx.beginPath();
-        ctx.arc(en.x, en.y, en.radius, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = "#2e3a1f";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        // camo spots
+        // color tint by speed (fast = redder)
+        const sNorm = (en.speed - config.enemySpeedMin) / (config.enemySpeedMax - config.enemySpeedMin);
+        const r = Math.floor(90 + sNorm * 110);
+        const g = Math.floor(107 - sNorm * 50);
+        const bb = Math.floor(58 - sNorm * 30);
+        ctx.fillStyle = `rgb(${r},${g},${bb})`;
+        ctx.beginPath(); ctx.arc(en.x, en.y, en.radius, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = "#2e3a1f"; ctx.lineWidth = 2; ctx.stroke();
         ctx.fillStyle = "#3d4a26";
         ctx.beginPath();
         ctx.arc(en.x - 5, en.y - 4, 5, 0, Math.PI * 2);
         ctx.arc(en.x + 6, en.y + 3, 4, 0, Math.PI * 2);
         ctx.fill();
 
-        // Letter — high contrast pill above
         const label = en.letter;
         ctx.font = "bold 22px ui-monospace, Menlo, monospace";
         const tw = ctx.measureText(label).width;
-        const padX = 8, padY = 4;
+        const padX = 8;
         const bx = en.x - tw / 2 - padX;
         const by = en.y - en.radius - 32;
         const bw = tw + padX * 2;
         const bh = 28;
         ctx.fillStyle = "rgba(0,0,0,0.85)";
         ctx.fillRect(bx, by, bw, bh);
-        ctx.strokeStyle = "#ffcc33";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(bx, by, bw, bh);
+        ctx.strokeStyle = "#ffcc33"; ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
         ctx.fillStyle = "#ffe066";
         ctx.textBaseline = "middle";
         ctx.textAlign = "center";
@@ -466,16 +636,10 @@ export default function TypingTowerGame() {
       // Turret
       const recoil = recoilRef.current;
       const ang = turretAngleRef.current;
-      // base
       ctx.fillStyle = "#1a1a1a";
-      ctx.beginPath();
-      ctx.arc(cx, cy, 34, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy, 34, 0, Math.PI * 2); ctx.fill();
       ctx.fillStyle = "#3a3a3a";
-      ctx.beginPath();
-      ctx.arc(cx, cy, 30, 0, Math.PI * 2);
-      ctx.fill();
-      // barrel
+      ctx.beginPath(); ctx.arc(cx, cy, 30, 0, Math.PI * 2); ctx.fill();
       ctx.save();
       ctx.translate(cx - Math.cos(ang) * recoil, cy - Math.sin(ang) * recoil);
       ctx.rotate(ang);
@@ -485,32 +649,23 @@ export default function TypingTowerGame() {
       ctx.strokeStyle = glow ? "#ff8c2a" : "#111";
       ctx.lineWidth = 2;
       ctx.strokeRect(0, -8, 46, 16);
-      // muzzle flash
       if (muzzleRef.current) {
         const m = muzzleRef.current.life / 0.08;
         ctx.fillStyle = `rgba(255,220,120,${m})`;
         ctx.beginPath();
-        ctx.moveTo(46, -10);
-        ctx.lineTo(70, 0);
-        ctx.lineTo(46, 10);
-        ctx.closePath();
-        ctx.fill();
+        ctx.moveTo(46, -10); ctx.lineTo(72, 0); ctx.lineTo(46, 10);
+        ctx.closePath(); ctx.fill();
       }
       ctx.restore();
-      // top cap
       ctx.fillStyle = "#222";
-      ctx.beginPath();
-      ctx.arc(cx, cy, 12, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy, 12, 0, Math.PI * 2); ctx.fill();
 
       // Particles
       for (const p of particlesRef.current) {
         const a = Math.max(0, p.life / p.maxLife);
         ctx.fillStyle = p.color;
         ctx.globalAlpha = a;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2); ctx.fill();
       }
       ctx.globalAlpha = 1;
     };
@@ -519,11 +674,12 @@ export default function TypingTowerGame() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  const bulletSpeedPct = Math.round(((currentBulletSpeed() - config.bulletSpeedBase) / (config.bulletSpeedMax - config.bulletSpeedBase)) * 100);
+
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
       <canvas ref={canvasRef} className="w-full h-full block" />
 
-      {/* HUD */}
       <div className="pointer-events-none absolute inset-0 p-4 flex flex-col justify-between text-foreground">
         <div className="flex items-start justify-between">
           <div className="bg-black/60 border border-white/10 rounded px-3 py-2 font-mono text-sm">
@@ -537,7 +693,7 @@ export default function TypingTowerGame() {
             </div>
           </div>
         </div>
-        <div className="flex justify-center">
+        <div className="flex justify-center gap-3">
           <div className="bg-black/60 border border-white/10 rounded px-3 py-2 w-80 font-mono text-xs">
             <div className="flex justify-between text-white/70 mb-1">
               <span>HEALTH</span>
@@ -547,6 +703,16 @@ export default function TypingTowerGame() {
               <div
                 className="h-full bg-gradient-to-r from-red-600 to-amber-400 transition-[width]"
                 style={{ width: `${(hudHealth / config.playerHealth) * 100}%` }}
+              />
+            </div>
+            <div className="flex justify-between text-white/70 mt-2 mb-1">
+              <span>BULLET CHARGE</span>
+              <span>{Math.max(0, Math.min(100, bulletSpeedPct))}%</span>
+            </div>
+            <div className="h-2 bg-white/10 rounded overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-amber-500 to-yellow-200"
+                style={{ width: `${Math.max(0, Math.min(100, bulletSpeedPct))}%` }}
               />
             </div>
           </div>
