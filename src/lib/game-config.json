@@ -1,0 +1,9 @@
+{
+  "stage": 1,
+  "spawnIntervalMs": 1400,
+  "enemySpeed": 38,
+  "bulletSpeed": 1400,
+  "letters": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+  "playerHealth": 100,
+  "enemyDamage": 10
+}
