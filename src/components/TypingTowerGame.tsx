@@ -587,7 +587,7 @@ export default function TypingTowerGame() {
       // Bullets — tracer with strong glow + length scaling with speed
       for (const b of bulletsRef.current) {
         const len = Math.min(34, 10 + b.speed / 70);
-        const ux = b.vx / b.speed, uy = b.vy / b.speed;
+        const ux = b.dx, uy = b.dy;
         const tx = b.x - ux * len, ty = b.y - uy * len;
         // outer glow
         ctx.strokeStyle = "rgba(255,180,80,0.35)";
