@@ -341,16 +341,22 @@ export default function TypingTowerGame() {
     const len = Math.hypot(dx, dy) || 1;
     const base = currentBulletSpeed();
     const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
-    const speed = base * jitter;
+    const launchSpeed = base * jitter;
+    const maxSpeed = launchSpeed * 2;
+    // v_f^2 = v_0^2 + 2 a D  =>  a = (v_f^2 - v_0^2) / (2 D)
+    const accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     const ang = Math.atan2(dy, dx);
     bulletsRef.current.push({
       id: nextId(),
       x: cx, y: cy,
-      vx: (dx / len) * speed,
-      vy: (dy / len) * speed,
+      dx: dx / len,
+      dy: dy / len,
+      speed: launchSpeed,
+      launchSpeed,
+      accel,
+      maxSpeed,
       targetId: enemy.id,
       life: 1.5,
-      speed,
     });
     // Turret rotates on fire only
     targetAngleRef.current = ang;
