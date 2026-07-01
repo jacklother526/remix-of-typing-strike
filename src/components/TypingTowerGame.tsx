@@ -438,9 +438,13 @@ export default function TypingTowerGame() {
     elapsedRef.current = 0;
     healthRef.current = config.playerHealth;
     gameOverRef.current = false;
+    missStreakRef.current = 0;
+    banUntilRef.current = 0;
     setHudCombo(0);
     setHudHealth(config.playerHealth);
     setGameOver(false);
+    setMissStreak(0);
+    setBanRemaining(0);
     buildLevel();
   };
 
