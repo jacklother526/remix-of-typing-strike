@@ -726,7 +726,9 @@ export default function TypingTowerGame() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const bulletSpeedPct = Math.round(((currentBulletSpeed() - config.bulletSpeedBase) / (config.bulletSpeedMax - config.bulletSpeedBase)) * 100);
+  const banSec = banRemaining > 0 ? (banRemaining / 1000).toFixed(1) : "0.0";
+  const banned = banRemaining > 0;
+  const missDots = [0, 1, 2, 3];
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
@@ -746,7 +748,7 @@ export default function TypingTowerGame() {
           </div>
         </div>
         <div className="flex justify-center gap-3">
-          <div className="bg-black/60 border border-white/10 rounded px-3 py-2 w-80 font-mono text-xs">
+          <div className="bg-black/60 border border-white/10 rounded px-3 py-2 w-96 font-mono text-xs">
             <div className="flex justify-between text-white/70 mb-1">
               <span>HEALTH</span>
               <span>{hudHealth}/{config.playerHealth}</span>
@@ -757,19 +759,36 @@ export default function TypingTowerGame() {
                 style={{ width: `${(hudHealth / config.playerHealth) * 100}%` }}
               />
             </div>
-            <div className="flex justify-between text-white/70 mt-2 mb-1">
-              <span>BULLET CHARGE</span>
-              <span>{Math.max(0, Math.min(100, bulletSpeedPct))}%</span>
+            <div className="flex justify-between items-center text-white/70 mt-2 mb-1">
+              <span>MISS STREAK</span>
+              <div className="flex gap-1">
+                {missDots.map(i => (
+                  <span
+                    key={i}
+                    className={`inline-block w-2.5 h-2.5 rounded-full border ${
+                      i < missStreak
+                        ? (i === 3 ? "bg-red-500 border-red-300" : "bg-amber-400 border-amber-200")
+                        : "bg-white/5 border-white/20"
+                    }`}
+                  />
+                ))}
+              </div>
             </div>
-            <div className="h-2 bg-white/10 rounded overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-amber-500 to-yellow-200"
-                style={{ width: `${Math.max(0, Math.min(100, bulletSpeedPct))}%` }}
-              />
+            <div className={`flex justify-between mt-1 ${banned ? "text-red-300" : "text-white/40"}`}>
+              <span>{banned ? "SHOT BAN" : "READY"}</span>
+              <span>{banned ? `${banSec}s` : "—"}</span>
             </div>
           </div>
         </div>
       </div>
+
+      {banned && !gameOver && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="font-mono text-red-500/90 text-6xl font-black tracking-widest animate-pulse">
+            JAMMED {banSec}s
+          </div>
+        </div>
+      )}
 
       {gameOver && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70">
