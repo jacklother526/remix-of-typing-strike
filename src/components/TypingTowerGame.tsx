@@ -463,6 +463,10 @@ export default function TypingTowerGame() {
         }
       }
 
+      // Ban countdown HUD
+      const rem = Math.max(0, banUntilRef.current - now);
+      setBanRemaining(rem);
+
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
 
