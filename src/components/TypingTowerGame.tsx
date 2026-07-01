@@ -372,6 +372,7 @@ export default function TypingTowerGame() {
   };
 
   useEffect(() => {
+    const MISS_PENALTY_MS = [2000, 4000, 7000]; // 1st, 2nd, 3rd consecutive mistake
     const onKey = (e: KeyboardEvent) => {
       if (gameOverRef.current) {
         if (e.key === "Enter") restart();
@@ -379,6 +380,13 @@ export default function TypingTowerGame() {
       }
       const k = e.key.toUpperCase();
       if (k.length !== 1 || !/[A-Z]/.test(k)) return;
+
+      // Shot ban: swallow input entirely while banned.
+      if (performance.now() < banUntilRef.current) {
+        audio.jam();
+        return;
+      }
+
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
       let target: Enemy | null = null;
@@ -393,10 +401,29 @@ export default function TypingTowerGame() {
         fireAt(target);
         comboRef.current += 1;
         setHudCombo(comboRef.current);
+        // Reset miss streak on a correct hit.
+        if (missStreakRef.current !== 0) {
+          missStreakRef.current = 0;
+          setMissStreak(0);
+        }
       } else {
         comboRef.current = 0;
         setHudCombo(0);
+        missStreakRef.current += 1;
+        setMissStreak(missStreakRef.current);
         audio.jam();
+        if (missStreakRef.current >= 4) {
+          // 4 consecutive mistakes -> destroyed / lose the level
+          healthRef.current = 0;
+          setHudHealth(0);
+          gameOverRef.current = true;
+          setGameOver(true);
+          audio.boom();
+        } else {
+          const penalty = MISS_PENALTY_MS[missStreakRef.current - 1];
+          banUntilRef.current = performance.now() + penalty;
+          setBanRemaining(penalty);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
