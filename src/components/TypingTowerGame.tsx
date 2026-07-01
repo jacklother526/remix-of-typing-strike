@@ -206,13 +206,13 @@ export default function TypingTowerGame() {
 
   const buildLevel = () => {
     const { w, h } = sizeRef.current;
-    const cx = w / 2, cy = h / 2;
+    const cx = w * 0.93, cy = h * 0.5;
     // 4 paths from 4 edges
     const starts: Vec[] = [
-      { x: w * 0.1, y: -20 },
-      { x: w + 20, y: h * 0.2 },
-      { x: w * 0.85, y: h + 20 },
-      { x: -20, y: h * 0.75 },
+      { x: -20, y: h * 0.15 },
+      { x: w * 0.25, y: -20 },
+      { x: -20, y: h * 0.85 },
+      { x: w * 0.35, y: h + 20 },
     ];
     pathsRef.current = starts.map((s, i) => buildPath(s, { x: cx, y: cy }, (i + 1) * 7919 + Math.floor(Math.random() * 9999)));
 
@@ -332,7 +332,7 @@ export default function TypingTowerGame() {
 
   const fireAt = (enemy: Enemy) => {
     const { w, h } = sizeRef.current;
-    const cx = w / 2, cy = h / 2;
+    const cx = w * 0.93, cy = h * 0.5;
     const dx = enemy.x - cx;
     const dy = enemy.y - cy;
     const len = Math.hypot(dx, dy) || 1;
@@ -365,7 +365,7 @@ export default function TypingTowerGame() {
       const k = e.key.toUpperCase();
       if (k.length !== 1 || !/[A-Z]/.test(k)) return;
       const { w, h } = sizeRef.current;
-      const cx = w / 2, cy = h / 2;
+      const cx = w * 0.93, cy = h * 0.5;
       let target: Enemy | null = null;
       let bestD = Infinity;
       for (const en of enemiesRef.current) {
@@ -418,7 +418,7 @@ export default function TypingTowerGame() {
       }
 
       const { w, h } = sizeRef.current;
-      const cx = w / 2, cy = h / 2;
+      const cx = w * 0.93, cy = h * 0.5;
 
       // Move enemies along paths
       for (const en of enemiesRef.current) {
@@ -519,7 +519,7 @@ export default function TypingTowerGame() {
       const c = canvasRef.current!;
       const ctx = c.getContext("2d")!;
       const { w, h } = sizeRef.current;
-      const cx = w / 2, cy = h / 2;
+      const cx = w * 0.93, cy = h * 0.5;
 
       // Ground
       ctx.fillStyle = "#2a2620";
