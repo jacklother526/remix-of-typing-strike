@@ -462,8 +462,10 @@ export default function TypingTowerGame() {
       // Update bullets — sweep test against obstacles and enemies
       const aliveBullets: Bullet[] = [];
       for (const b of bulletsRef.current) {
-        const nx = b.x + b.vx * dt;
-        const ny = b.y + b.vy * dt;
+        // accelerate up to maxSpeed
+        b.speed = Math.min(b.maxSpeed, b.speed + b.accel * dt);
+        const nx = b.x + b.dx * b.speed * dt;
+        const ny = b.y + b.dy * b.speed * dt;
         b.life -= dt;
         let consumed = false;
 
