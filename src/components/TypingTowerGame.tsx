@@ -200,12 +200,16 @@ export default function TypingTowerGame() {
   const comboRef = useRef(0);
   const healthRef = useRef(config.playerHealth);
   const gameOverRef = useRef(false);
+  const missStreakRef = useRef(0);
+  const banUntilRef = useRef(0); // performance.now() ms
 
   const audio = useAudio();
 
   const [hudCombo, setHudCombo] = useState(0);
   const [hudHealth, setHudHealth] = useState(config.playerHealth);
   const [gameOver, setGameOver] = useState(false);
+  const [banRemaining, setBanRemaining] = useState(0);
+  const [missStreak, setMissStreak] = useState(0);
 
   const buildLevel = () => {
     const { w, h } = sizeRef.current;
