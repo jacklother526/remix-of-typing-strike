@@ -19,11 +19,14 @@ type Bullet = {
   id: number;
   x: number;
   y: number;
-  vx: number;
-  vy: number;
+  dx: number; // unit direction
+  dy: number;
+  speed: number;      // current speed
+  launchSpeed: number;
+  accel: number;      // px/s^2
+  maxSpeed: number;   // 2x launch
   targetId: number;
   life: number;
-  speed: number;
 };
 
 type Particle = {
@@ -197,12 +200,16 @@ export default function TypingTowerGame() {
   const comboRef = useRef(0);
   const healthRef = useRef(config.playerHealth);
   const gameOverRef = useRef(false);
+  const missStreakRef = useRef(0);
+  const banUntilRef = useRef(0); // performance.now() ms
 
   const audio = useAudio();
 
   const [hudCombo, setHudCombo] = useState(0);
   const [hudHealth, setHudHealth] = useState(config.playerHealth);
   const [gameOver, setGameOver] = useState(false);
+  const [banRemaining, setBanRemaining] = useState(0);
+  const [missStreak, setMissStreak] = useState(0);
 
   const buildLevel = () => {
     const { w, h } = sizeRef.current;
@@ -248,18 +255,20 @@ export default function TypingTowerGame() {
     obstaclesRef.current = obs;
   };
 
-  // Resize
+  // Resize — world is 1.5x the client size so we see more battlefield (zoom out).
   useEffect(() => {
     const c = canvasRef.current!;
+    const ZOOM = 1 / 1.5; // draw scale
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
-      const w = c.clientWidth;
-      const h = c.clientHeight;
-      c.width = w * dpr;
-      c.height = h * dpr;
+      const cw = c.clientWidth;
+      const ch = c.clientHeight;
+      c.width = cw * dpr;
+      c.height = ch * dpr;
       const ctx = c.getContext("2d")!;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      sizeRef.current = { w, h };
+      // Apply dpr and zoom so world units are 1.5x screen units.
+      ctx.setTransform(dpr * ZOOM, 0, 0, dpr * ZOOM, 0, 0);
+      sizeRef.current = { w: cw / ZOOM, h: ch / ZOOM };
       if (pathsRef.current.length === 0) buildLevel();
     };
     resize();
@@ -338,16 +347,22 @@ export default function TypingTowerGame() {
     const len = Math.hypot(dx, dy) || 1;
     const base = currentBulletSpeed();
     const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
-    const speed = base * jitter;
+    const launchSpeed = base * jitter;
+    const maxSpeed = launchSpeed * 2;
+    // v_f^2 = v_0^2 + 2 a D  =>  a = (v_f^2 - v_0^2) / (2 D)
+    const accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     const ang = Math.atan2(dy, dx);
     bulletsRef.current.push({
       id: nextId(),
       x: cx, y: cy,
-      vx: (dx / len) * speed,
-      vy: (dy / len) * speed,
+      dx: dx / len,
+      dy: dy / len,
+      speed: launchSpeed,
+      launchSpeed,
+      accel,
+      maxSpeed,
       targetId: enemy.id,
       life: 1.5,
-      speed,
     });
     // Turret rotates on fire only
     targetAngleRef.current = ang;
@@ -357,6 +372,7 @@ export default function TypingTowerGame() {
   };
 
   useEffect(() => {
+    const MISS_PENALTY_MS = [2000, 4000, 7000]; // 1st, 2nd, 3rd consecutive mistake
     const onKey = (e: KeyboardEvent) => {
       if (gameOverRef.current) {
         if (e.key === "Enter") restart();
@@ -364,6 +380,13 @@ export default function TypingTowerGame() {
       }
       const k = e.key.toUpperCase();
       if (k.length !== 1 || !/[A-Z]/.test(k)) return;
+
+      // Shot ban: swallow input entirely while banned.
+      if (performance.now() < banUntilRef.current) {
+        audio.jam();
+        return;
+      }
+
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
       let target: Enemy | null = null;
@@ -378,10 +401,29 @@ export default function TypingTowerGame() {
         fireAt(target);
         comboRef.current += 1;
         setHudCombo(comboRef.current);
+        // Reset miss streak on a correct hit.
+        if (missStreakRef.current !== 0) {
+          missStreakRef.current = 0;
+          setMissStreak(0);
+        }
       } else {
         comboRef.current = 0;
         setHudCombo(0);
+        missStreakRef.current += 1;
+        setMissStreak(missStreakRef.current);
         audio.jam();
+        if (missStreakRef.current >= 4) {
+          // 4 consecutive mistakes -> destroyed / lose the level
+          healthRef.current = 0;
+          setHudHealth(0);
+          gameOverRef.current = true;
+          setGameOver(true);
+          audio.boom();
+        } else {
+          const penalty = MISS_PENALTY_MS[missStreakRef.current - 1];
+          banUntilRef.current = performance.now() + penalty;
+          setBanRemaining(penalty);
+        }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -396,9 +438,13 @@ export default function TypingTowerGame() {
     elapsedRef.current = 0;
     healthRef.current = config.playerHealth;
     gameOverRef.current = false;
+    missStreakRef.current = 0;
+    banUntilRef.current = 0;
     setHudCombo(0);
     setHudHealth(config.playerHealth);
     setGameOver(false);
+    setMissStreak(0);
+    setBanRemaining(0);
     buildLevel();
   };
 
@@ -416,6 +462,10 @@ export default function TypingTowerGame() {
           spawnEnemy();
         }
       }
+
+      // Ban countdown HUD
+      const rem = Math.max(0, banUntilRef.current - now);
+      setBanRemaining(rem);
 
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
@@ -453,8 +503,10 @@ export default function TypingTowerGame() {
       // Update bullets — sweep test against obstacles and enemies
       const aliveBullets: Bullet[] = [];
       for (const b of bulletsRef.current) {
-        const nx = b.x + b.vx * dt;
-        const ny = b.y + b.vy * dt;
+        // accelerate up to maxSpeed
+        b.speed = Math.min(b.maxSpeed, b.speed + b.accel * dt);
+        const nx = b.x + b.dx * b.speed * dt;
+        const ny = b.y + b.dy * b.speed * dt;
         b.life -= dt;
         let consumed = false;
 
@@ -576,7 +628,7 @@ export default function TypingTowerGame() {
       // Bullets — tracer with strong glow + length scaling with speed
       for (const b of bulletsRef.current) {
         const len = Math.min(34, 10 + b.speed / 70);
-        const ux = b.vx / b.speed, uy = b.vy / b.speed;
+        const ux = b.dx, uy = b.dy;
         const tx = b.x - ux * len, ty = b.y - uy * len;
         // outer glow
         ctx.strokeStyle = "rgba(255,180,80,0.35)";
@@ -674,7 +726,9 @@ export default function TypingTowerGame() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  const bulletSpeedPct = Math.round(((currentBulletSpeed() - config.bulletSpeedBase) / (config.bulletSpeedMax - config.bulletSpeedBase)) * 100);
+  const banSec = banRemaining > 0 ? (banRemaining / 1000).toFixed(1) : "0.0";
+  const banned = banRemaining > 0;
+  const missDots = [0, 1, 2, 3];
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
@@ -694,7 +748,7 @@ export default function TypingTowerGame() {
           </div>
         </div>
         <div className="flex justify-center gap-3">
-          <div className="bg-black/60 border border-white/10 rounded px-3 py-2 w-80 font-mono text-xs">
+          <div className="bg-black/60 border border-white/10 rounded px-3 py-2 w-96 font-mono text-xs">
             <div className="flex justify-between text-white/70 mb-1">
               <span>HEALTH</span>
               <span>{hudHealth}/{config.playerHealth}</span>
@@ -705,19 +759,36 @@ export default function TypingTowerGame() {
                 style={{ width: `${(hudHealth / config.playerHealth) * 100}%` }}
               />
             </div>
-            <div className="flex justify-between text-white/70 mt-2 mb-1">
-              <span>BULLET CHARGE</span>
-              <span>{Math.max(0, Math.min(100, bulletSpeedPct))}%</span>
+            <div className="flex justify-between items-center text-white/70 mt-2 mb-1">
+              <span>MISS STREAK</span>
+              <div className="flex gap-1">
+                {missDots.map(i => (
+                  <span
+                    key={i}
+                    className={`inline-block w-2.5 h-2.5 rounded-full border ${
+                      i < missStreak
+                        ? (i === 3 ? "bg-red-500 border-red-300" : "bg-amber-400 border-amber-200")
+                        : "bg-white/5 border-white/20"
+                    }`}
+                  />
+                ))}
+              </div>
             </div>
-            <div className="h-2 bg-white/10 rounded overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-amber-500 to-yellow-200"
-                style={{ width: `${Math.max(0, Math.min(100, bulletSpeedPct))}%` }}
-              />
+            <div className={`flex justify-between mt-1 ${banned ? "text-red-300" : "text-white/40"}`}>
+              <span>{banned ? "SHOT BAN" : "READY"}</span>
+              <span>{banned ? `${banSec}s` : "—"}</span>
             </div>
           </div>
         </div>
       </div>
+
+      {banned && !gameOver && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="font-mono text-red-500/90 text-6xl font-black tracking-widest animate-pulse">
+            JAMMED {banSec}s
+          </div>
+        </div>
+      )}
 
       {gameOver && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/70">
