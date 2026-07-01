@@ -19,11 +19,14 @@ type Bullet = {
   id: number;
   x: number;
   y: number;
-  vx: number;
-  vy: number;
+  dx: number; // unit direction
+  dy: number;
+  speed: number;      // current speed
+  launchSpeed: number;
+  accel: number;      // px/s^2
+  maxSpeed: number;   // 2x launch
   targetId: number;
   life: number;
-  speed: number;
 };
 
 type Particle = {
