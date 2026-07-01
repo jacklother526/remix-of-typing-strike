@@ -251,18 +251,20 @@ export default function TypingTowerGame() {
     obstaclesRef.current = obs;
   };
 
-  // Resize
+  // Resize — world is 1.5x the client size so we see more battlefield (zoom out).
   useEffect(() => {
     const c = canvasRef.current!;
+    const ZOOM = 1 / 1.5; // draw scale
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
-      const w = c.clientWidth;
-      const h = c.clientHeight;
-      c.width = w * dpr;
-      c.height = h * dpr;
+      const cw = c.clientWidth;
+      const ch = c.clientHeight;
+      c.width = cw * dpr;
+      c.height = ch * dpr;
       const ctx = c.getContext("2d")!;
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      sizeRef.current = { w, h };
+      // Apply dpr and zoom so world units are 1.5x screen units.
+      ctx.setTransform(dpr * ZOOM, 0, 0, dpr * ZOOM, 0, 0);
+      sizeRef.current = { w: cw / ZOOM, h: ch / ZOOM };
       if (pathsRef.current.length === 0) buildLevel();
     };
     resize();
