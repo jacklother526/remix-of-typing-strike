@@ -1,43 +1,56 @@
 import { useEffect, useRef, useState } from "react";
 import config from "@/lib/game-config.json";
+import {
+  lettersForLevel,
+  targetWordLength,
+  spawnIntervalMs,
+  enemySpeedMultiplier,
+  pickEnemyKind,
+  pickWord,
+  pickLetter,
+  type EnemyKind,
+} from "@/lib/game-progression";
 
 type Vec = { x: number; y: number };
 
 type Enemy = {
   id: number;
   pathIdx: number;
-  t: number; // distance traveled along path
-  x: number;
+  t: number;         // distance traveled along path
+  x: number;         // rendered position (with sway)
   y: number;
-  letter: string;
-  hp: number;
+  baseX: number;     // path centerline position
+  baseY: number;
+  kind: EnemyKind;
+  word: string;      // 1 letter in L1-10, longer word in L11+
+  typed: number;     // # of letters already destroyed
+  hp: number;        // matches remaining letters
   speed: number;
   radius: number;
+  sway: number;      // amplitude px
+  swayFreq: number;  // rad/s
+  swayPhase: number;
+  age: number;
 };
 
 type Bullet = {
   id: number;
-  x: number;
-  y: number;
-  dx: number; // unit direction
-  dy: number;
-  speed: number;      // current speed
+  x: number; y: number;
+  dx: number; dy: number;
+  speed: number;
   launchSpeed: number;
-  accel: number;      // px/s^2
-  maxSpeed: number;   // 2x launch
+  accel: number;
+  maxSpeed: number;
   targetId: number;
   life: number;
+  bounces: number;
 };
 
 type Particle = {
-  x: number;
-  y: number;
-  vx: number;
-  vy: number;
-  life: number;
-  maxLife: number;
-  color: string;
-  size: number;
+  x: number; y: number;
+  vx: number; vy: number;
+  life: number; maxLife: number;
+  color: string; size: number;
 };
 
 type Obstacle = { x: number; y: number; r: number; hp: number };
@@ -45,8 +58,8 @@ type Obstacle = { x: number; y: number; r: number; hp: number };
 type MuzzleFlash = { angle: number; life: number };
 
 type Path = {
-  points: Vec[];     // waypoints
-  cum: number[];     // cumulative lengths
+  points: Vec[];
+  cum: number[];
   total: number;
 };
 
@@ -72,7 +85,7 @@ function useAudio() {
       o.type = "square";
       o.frequency.setValueAtTime(980, t);
       o.frequency.exponentialRampToValueAtTime(110, t + 0.07);
-      g.gain.setValueAtTime(0.2, t);
+      g.gain.setValueAtTime(0.18, t);
       g.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
       o.connect(g).connect(ctx.destination);
       o.start(t); o.stop(t + 0.09);
@@ -120,32 +133,43 @@ function useAudio() {
       o.connect(g).connect(ctx.destination);
       o.start(t); o.stop(t + 0.1);
     },
+    tick: () => {
+      const ctx = ensure();
+      const t = ctx.currentTime;
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "square";
+      o.frequency.setValueAtTime(1400, t);
+      g.gain.setValueAtTime(0.05, t);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.04);
+      o.connect(g).connect(ctx.destination);
+      o.start(t); o.stop(t + 0.05);
+    },
   };
 }
 
-// Build a curvy path from an edge point to the center
-function buildPath(start: Vec, end: Vec, seed: number): Path {
-  const points: Vec[] = [start];
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const dist = Math.hypot(dx, dy);
-  const steps = 6;
-  // perpendicular unit
-  const nx = -dy / dist;
-  const ny = dx / dist;
+// Build a curvy path through a list of anchors, adding wobble between them.
+function buildPathThrough(anchors: Vec[], seed: number): Path {
   let s = seed;
   const rand = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
-  for (let i = 1; i < steps; i++) {
-    const t = i / steps;
-    const baseX = start.x + dx * t;
-    const baseY = start.y + dy * t;
-    // taper offset near ends so path actually reaches start/end
-    const taper = Math.sin(t * Math.PI);
-    const off = (rand() - 0.5) * 280 * taper;
-    points.push({ x: baseX + nx * off, y: baseY + ny * off });
+  const points: Vec[] = [anchors[0]];
+  for (let a = 0; a < anchors.length - 1; a++) {
+    const A = anchors[a], B = anchors[a + 1];
+    const dx = B.x - A.x, dy = B.y - A.y;
+    const dist = Math.hypot(dx, dy) || 1;
+    const nx = -dy / dist, ny = dx / dist;
+    const steps = 5;
+    for (let i = 1; i < steps; i++) {
+      const t = i / steps;
+      const bx = A.x + dx * t;
+      const by = A.y + dy * t;
+      const taper = Math.sin(t * Math.PI);
+      const amp = Math.min(220, dist * 0.22);
+      const off = (rand() - 0.5) * amp * 2 * taper;
+      points.push({ x: bx + nx * off, y: by + ny * off });
+    }
+    points.push(B);
   }
-  points.push(end);
-  // cumulative lengths
   const cum: number[] = [0];
   let total = 0;
   for (let i = 1; i < points.length; i++) {
@@ -158,7 +182,6 @@ function buildPath(start: Vec, end: Vec, seed: number): Path {
 function pointOnPath(path: Path, t: number): Vec {
   if (t <= 0) return path.points[0];
   if (t >= path.total) return path.points[path.points.length - 1];
-  // find segment
   let i = 1;
   while (i < path.cum.length && path.cum[i] < t) i++;
   const segLen = path.cum[i] - path.cum[i - 1];
@@ -167,7 +190,14 @@ function pointOnPath(path: Path, t: number): Vec {
   return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f };
 }
 
-// segment-circle intersection (for bullet vs obstacle and bullet vs enemy quick test)
+function pathTangent(path: Path, t: number): Vec {
+  const p1 = pointOnPath(path, Math.max(0, t - 2));
+  const p2 = pointOnPath(path, Math.min(path.total, t + 2));
+  const dx = p2.x - p1.x, dy = p2.y - p1.y;
+  const d = Math.hypot(dx, dy) || 1;
+  return { x: dx / d, y: dy / d };
+}
+
 function segCircleHit(x1: number, y1: number, x2: number, y2: number, cx: number, cy: number, r: number): boolean {
   const dx = x2 - x1, dy = y2 - y1;
   const fx = x1 - cx, fy = y1 - cy;
@@ -190,8 +220,8 @@ export default function TypingTowerGame() {
   const obstaclesRef = useRef<Obstacle[]>([]);
   const pathsRef = useRef<Path[]>([]);
   const muzzleRef = useRef<MuzzleFlash | null>(null);
-  const turretAngleRef = useRef(-Math.PI / 2);
-  const targetAngleRef = useRef(-Math.PI / 2);
+  const turretAngleRef = useRef(Math.PI);
+  const targetAngleRef = useRef(Math.PI);
   const recoilRef = useRef(0);
   const sizeRef = useRef({ w: 1280, h: 720 });
   const lastSpawnRef = useRef(0);
@@ -201,7 +231,11 @@ export default function TypingTowerGame() {
   const healthRef = useRef(config.playerHealth);
   const gameOverRef = useRef(false);
   const missStreakRef = useRef(0);
-  const banUntilRef = useRef(0); // performance.now() ms
+  const banUntilRef = useRef(0);
+  const levelRef = useRef(1);
+  const killsRef = useRef(0);
+  const activeTargetRef = useRef<number | null>(null); // enemy id being typed in word mode
+  const levelBannerRef = useRef(0); // sec remaining to display "LEVEL X"
 
   const audio = useAudio();
 
@@ -210,55 +244,63 @@ export default function TypingTowerGame() {
   const [gameOver, setGameOver] = useState(false);
   const [banRemaining, setBanRemaining] = useState(0);
   const [missStreak, setMissStreak] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [kills, setKills] = useState(0);
+  const [showBanner, setShowBanner] = useState(false);
 
   const buildLevel = () => {
     const { w, h } = sizeRef.current;
     const cx = w * 0.93, cy = h * 0.5;
-    // 4 paths from 4 edges
-    const starts: Vec[] = [
-      { x: -20, y: h * 0.15 },
-      { x: w * 0.25, y: -20 },
-      { x: -20, y: h * 0.85 },
-      { x: w * 0.35, y: h + 20 },
-    ];
-    pathsRef.current = starts.map((s, i) => buildPath(s, { x: cx, y: cy }, (i + 1) * 7919 + Math.floor(Math.random() * 9999)));
+    const jitter = (r: number) => (Math.random() - 0.5) * r;
 
-    // Obstacles — keep away from turret and away from path centerlines (close enough to be in shooting lanes but not blocking the road)
+    // Path anchors:
+    //  0: straight-ish from left-middle
+    //  1: UPPER — start near top-left, cross to top-right corner, then curve down to turret
+    //  2: from left-lower
+    //  3: LOWER — start near bottom-left, cross to bottom-right corner, then curve up to turret
+    const upperCorner = { x: w * 0.9 + jitter(60), y: h * 0.1 + jitter(40) };
+    const lowerCorner = { x: w * 0.9 + jitter(60), y: h * 0.9 + jitter(40) };
+
+    const specs: Vec[][] = [
+      [{ x: -20, y: h * 0.35 + jitter(60) }, { x: w * 0.55, y: h * 0.5 + jitter(80) }, { x: cx, y: cy }],
+      [{ x: w * 0.08 + jitter(60), y: -20 }, upperCorner, { x: cx, y: cy }],
+      [{ x: -20, y: h * 0.75 + jitter(60) }, { x: w * 0.5, y: h * 0.65 + jitter(60) }, { x: cx, y: cy }],
+      [{ x: w * 0.12 + jitter(60), y: h + 20 }, lowerCorner, { x: cx, y: cy }],
+    ];
+    pathsRef.current = specs.map((s, i) => buildPathThrough(s, (i + 1) * 7919 + Math.floor(Math.random() * 9999)));
+
+    // Obstacles — poles scattered off the roads, not blocking them.
     const obs: Obstacle[] = [];
     let tries = 0;
-    const minTurret = 110;
+    const minTurret = 130;
     while (obs.length < config.obstacleCount && tries < 400) {
       tries++;
       const x = 60 + Math.random() * (w - 120);
       const y = 60 + Math.random() * (h - 120);
       if (Math.hypot(x - cx, y - cy) < minTurret) continue;
-      // not directly on a path centerline (still possible to be near edges of road)
       let onPath = false;
       for (const p of pathsRef.current) {
         for (let i = 1; i < p.points.length; i++) {
           const a = p.points[i - 1], b = p.points[i];
-          // distance from point to segment
           const vx = b.x - a.x, vy = b.y - a.y;
           const wx = x - a.x, wy = y - a.y;
-          const segL2 = vx * vx + vy * vy;
+          const segL2 = (vx * vx + vy * vy) || 1;
           const tt = Math.max(0, Math.min(1, (wx * vx + wy * vy) / segL2));
           const px = a.x + vx * tt, py = a.y + vy * tt;
-          if (Math.hypot(x - px, y - py) < 18) { onPath = true; break; }
+          if (Math.hypot(x - px, y - py) < config.pathWidth * 0.6) { onPath = true; break; }
         }
         if (onPath) break;
       }
       if (onPath) continue;
-      // not too close to other obstacles
       if (obs.some(o => Math.hypot(o.x - x, o.y - y) < 70)) continue;
       obs.push({ x, y, r: 6 + Math.random() * 4, hp: 3 });
     }
     obstaclesRef.current = obs;
   };
 
-  // Resize — world is 1.5x the client size so we see more battlefield (zoom out).
   useEffect(() => {
     const c = canvasRef.current!;
-    const ZOOM = 1 / 1.5; // draw scale
+    const ZOOM = 1 / 1.5;
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
       const cw = c.clientWidth;
@@ -266,10 +308,9 @@ export default function TypingTowerGame() {
       c.width = cw * dpr;
       c.height = ch * dpr;
       const ctx = c.getContext("2d")!;
-      // Apply dpr and zoom so world units are 1.5x screen units.
       ctx.setTransform(dpr * ZOOM, 0, 0, dpr * ZOOM, 0, 0);
       sizeRef.current = { w: cw / ZOOM, h: ch / ZOOM };
-      if (pathsRef.current.length === 0) buildLevel();
+      buildLevel();
     };
     resize();
     window.addEventListener("resize", resize);
@@ -281,41 +322,71 @@ export default function TypingTowerGame() {
     const pi = Math.floor(Math.random() * pathsRef.current.length);
     const p = pathsRef.current[pi];
     const start = p.points[0];
-    const letters = config.letters;
-    const letter = letters[Math.floor(Math.random() * letters.length)];
-    const speed = config.enemySpeedMin + Math.random() * (config.enemySpeedMax - config.enemySpeedMin);
+    const lvl = levelRef.current;
+    const kind = pickEnemyKind(lvl);
+
+    // Word / letter
+    const wordLen = targetWordLength(lvl);
+    let word: string;
+    if (wordLen === 1) {
+      word = pickLetter(lvl);
+    } else {
+      // Tanks get a longer word
+      const useLen = kind === "tank" ? Math.min(8, wordLen + 1) : wordLen;
+      word = pickWord(useLen);
+    }
+
+    // Speed by kind
+    const mul = enemySpeedMultiplier(lvl, elapsedRef.current);
+    const baseSpeed = config.enemySpeedMin + Math.random() * (config.enemySpeedMax - config.enemySpeedMin);
+    let speed = baseSpeed * mul;
+    let radius = 18;
+    let sway = 0;
+    let swayFreq = 0;
+
+    if (kind === "runner") { speed *= 1.5; radius = 15; }
+    else if (kind === "tank") { speed *= 0.55; radius = 26; }
+    else if (kind === "weaver") { sway = 22; swayFreq = 3.4; }
+
     enemiesRef.current.push({
       id: nextId(),
       pathIdx: pi,
       t: 0,
-      x: start.x,
-      y: start.y,
-      letter,
-      hp: 1,
+      x: start.x, y: start.y,
+      baseX: start.x, baseY: start.y,
+      kind,
+      word,
+      typed: 0,
+      hp: word.length,
       speed,
-      radius: 18,
+      radius,
+      sway,
+      swayFreq,
+      swayPhase: Math.random() * Math.PI * 2,
+      age: 0,
     });
   };
 
-  const explode = (x: number, y: number) => {
-    for (let i = 0; i < 24; i++) {
+  const explode = (x: number, y: number, big = false) => {
+    const n = big ? 40 : 24;
+    for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2;
-      const s = 80 + Math.random() * 240;
+      const s = 80 + Math.random() * (big ? 360 : 240);
       particlesRef.current.push({
         x, y,
         vx: Math.cos(a) * s, vy: Math.sin(a) * s,
-        life: 0.5 + Math.random() * 0.3, maxLife: 0.8,
+        life: 0.5 + Math.random() * 0.4, maxLife: 0.9,
         color: Math.random() < 0.5 ? "#ffb347" : "#ff5722",
         size: 2 + Math.random() * 3,
       });
     }
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < (big ? 18 : 10); i++) {
       const a = Math.random() * Math.PI * 2;
       particlesRef.current.push({
         x, y,
         vx: Math.cos(a) * (30 + Math.random() * 80),
         vy: Math.sin(a) * (30 + Math.random() * 80),
-        life: 0.6, maxLife: 0.6,
+        life: 0.7, maxLife: 0.7,
         color: "#555", size: 4 + Math.random() * 4,
       });
     }
@@ -349,30 +420,44 @@ export default function TypingTowerGame() {
     const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
     const launchSpeed = base * jitter;
     const maxSpeed = launchSpeed * 2;
-    // v_f^2 = v_0^2 + 2 a D  =>  a = (v_f^2 - v_0^2) / (2 D)
     const accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     const ang = Math.atan2(dy, dx);
     bulletsRef.current.push({
       id: nextId(),
       x: cx, y: cy,
-      dx: dx / len,
-      dy: dy / len,
-      speed: launchSpeed,
-      launchSpeed,
-      accel,
-      maxSpeed,
+      dx: dx / len, dy: dy / len,
+      speed: launchSpeed, launchSpeed, accel, maxSpeed,
       targetId: enemy.id,
       life: 1.5,
+      bounces: 0,
     });
-    // Turret rotates on fire only
     targetAngleRef.current = ang;
     recoilRef.current = 8;
     muzzleRef.current = { angle: ang, life: 0.08 };
     audio.shot();
   };
 
+  const registerKill = () => {
+    killsRef.current += 1;
+    setKills(killsRef.current);
+    if (killsRef.current >= config.killsPerLevel) {
+      // Advance level
+      killsRef.current = 0;
+      setKills(0);
+      levelRef.current += 1;
+      setLevel(levelRef.current);
+      levelBannerRef.current = 2.2;
+      setShowBanner(true);
+      buildLevel();
+      // Clear old-level enemies visually (leave bullets)
+      enemiesRef.current = [];
+      activeTargetRef.current = null;
+      audio.boom();
+    }
+  };
+
   useEffect(() => {
-    const MISS_PENALTY_MS = [2000, 4000, 7000]; // 1st, 2nd, 3rd consecutive mistake
+    const MISS_PENALTY_MS = [2000, 4000, 7000];
     const onKey = (e: KeyboardEvent) => {
       if (gameOverRef.current) {
         if (e.key === "Enter") restart();
@@ -381,39 +466,25 @@ export default function TypingTowerGame() {
       const k = e.key.toUpperCase();
       if (k.length !== 1 || !/[A-Z]/.test(k)) return;
 
-      // Shot ban: swallow input entirely while banned.
       if (performance.now() < banUntilRef.current) {
         audio.jam();
         return;
       }
 
-      const { w, h } = sizeRef.current;
-      const cx = w * 0.93, cy = h * 0.5;
+      // If a target is locked (word mid-type), only its next letter counts.
       let target: Enemy | null = null;
-      let bestD = Infinity;
-      for (const en of enemiesRef.current) {
-        if (en.letter === k) {
-          const d = Math.hypot(en.x - cx, en.y - cy);
-          if (d < bestD) { bestD = d; target = en; }
-        }
+      if (activeTargetRef.current != null) {
+        target = enemiesRef.current.find(e => e.id === activeTargetRef.current) || null;
+        if (!target) activeTargetRef.current = null;
       }
-      if (target) {
-        fireAt(target);
-        comboRef.current += 1;
-        setHudCombo(comboRef.current);
-        // Reset miss streak on a correct hit.
-        if (missStreakRef.current !== 0) {
-          missStreakRef.current = 0;
-          setMissStreak(0);
-        }
-      } else {
+
+      const registerMiss = () => {
         comboRef.current = 0;
         setHudCombo(0);
         missStreakRef.current += 1;
         setMissStreak(missStreakRef.current);
         audio.jam();
         if (missStreakRef.current >= 4) {
-          // 4 consecutive mistakes -> destroyed / lose the level
           healthRef.current = 0;
           setHudHealth(0);
           gameOverRef.current = true;
@@ -424,6 +495,47 @@ export default function TypingTowerGame() {
           banUntilRef.current = performance.now() + penalty;
           setBanRemaining(penalty);
         }
+      };
+
+      if (target) {
+        // Locked: expect target.word[target.typed] === k
+        const expected = target.word[target.typed];
+        if (expected === k) {
+          target.typed += 1;
+          fireAt(target);
+          if (target.typed >= target.word.length) {
+            // final hit resolved when bullet lands
+            target.hp = 1; // last chunk
+          }
+          comboRef.current += 1;
+          setHudCombo(comboRef.current);
+          if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
+        } else {
+          registerMiss();
+        }
+        return;
+      }
+
+      // Not locked: find any enemy whose FIRST letter matches
+      const { w, h } = sizeRef.current;
+      const cx = w * 0.93, cy = h * 0.5;
+      let best: Enemy | null = null;
+      let bestD = Infinity;
+      for (const en of enemiesRef.current) {
+        if (en.typed === 0 && en.word[0] === k) {
+          const d = Math.hypot(en.x - cx, en.y - cy);
+          if (d < bestD) { bestD = d; best = en; }
+        }
+      }
+      if (best) {
+        best.typed = 1;
+        fireAt(best);
+        if (best.word.length > 1) activeTargetRef.current = best.id;
+        comboRef.current += 1;
+        setHudCombo(comboRef.current);
+        if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
+      } else {
+        registerMiss();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -440,11 +552,16 @@ export default function TypingTowerGame() {
     gameOverRef.current = false;
     missStreakRef.current = 0;
     banUntilRef.current = 0;
+    levelRef.current = 1;
+    killsRef.current = 0;
+    activeTargetRef.current = null;
     setHudCombo(0);
     setHudHealth(config.playerHealth);
     setGameOver(false);
     setMissStreak(0);
     setBanRemaining(0);
+    setLevel(1);
+    setKills(0);
     buildLevel();
   };
 
@@ -457,39 +574,55 @@ export default function TypingTowerGame() {
       if (!gameOverRef.current) {
         elapsedRef.current += dt;
         lastSpawnRef.current += dt * 1000;
-        if (lastSpawnRef.current > config.spawnIntervalMs) {
+        const interval = spawnIntervalMs(levelRef.current, elapsedRef.current);
+        if (lastSpawnRef.current > interval) {
           lastSpawnRef.current = 0;
           spawnEnemy();
         }
       }
 
-      // Ban countdown HUD
       const rem = Math.max(0, banUntilRef.current - now);
       setBanRemaining(rem);
+
+      if (levelBannerRef.current > 0) {
+        levelBannerRef.current -= dt;
+        if (levelBannerRef.current <= 0) setShowBanner(false);
+      }
 
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
 
-      // Move enemies along paths
+      // Move enemies along path + sway
       for (const en of enemiesRef.current) {
+        en.age += dt;
         en.t += en.speed * dt;
         const p = pathsRef.current[en.pathIdx];
         const pos = pointOnPath(p, en.t);
-        en.x = pos.x;
-        en.y = pos.y;
+        en.baseX = pos.x; en.baseY = pos.y;
+        if (en.sway > 0) {
+          const tan = pathTangent(p, en.t);
+          const nx = -tan.y, ny = tan.x;
+          const s = Math.sin(en.age * en.swayFreq + en.swayPhase) * en.sway;
+          en.x = pos.x + nx * s;
+          en.y = pos.y + ny * s;
+        } else {
+          en.x = pos.x; en.y = pos.y;
+        }
       }
 
-      // Enemy reaches turret (end of path)
+      // Enemy reaches turret
       const survivors: Enemy[] = [];
       for (const en of enemiesRef.current) {
         const p = pathsRef.current[en.pathIdx];
         if (en.t >= p.total - 4) {
-          healthRef.current -= config.enemyDamage;
+          const dmg = config.enemyDamage * (en.kind === "tank" ? 2 : 1);
+          healthRef.current -= dmg;
           setHudHealth(Math.max(0, healthRef.current));
-          explode(en.x, en.y);
+          explode(en.x, en.y, en.kind === "tank");
           audio.thud();
           comboRef.current = 0;
           setHudCombo(0);
+          if (activeTargetRef.current === en.id) activeTargetRef.current = null;
           if (healthRef.current <= 0 && !gameOverRef.current) {
             gameOverRef.current = true;
             setGameOver(true);
@@ -500,43 +633,66 @@ export default function TypingTowerGame() {
       }
       enemiesRef.current = survivors;
 
-      // Update bullets — sweep test against obstacles and enemies
+      // Bullets
       const aliveBullets: Bullet[] = [];
       for (const b of bulletsRef.current) {
-        // accelerate up to maxSpeed
         b.speed = Math.min(b.maxSpeed, b.speed + b.accel * dt);
         const nx = b.x + b.dx * b.speed * dt;
         const ny = b.y + b.dy * b.speed * dt;
         b.life -= dt;
         let consumed = false;
 
-        // obstacles
+        // obstacles — with ricochet
         for (const o of obstaclesRef.current) {
           if (segCircleHit(b.x, b.y, nx, ny, o.x, o.y, o.r + 2)) {
             sparks(o.x, o.y);
             o.hp -= 1;
-            consumed = true;
+            if (o.hp <= 0) {
+              // punch through — bullet continues
+              audio.tick();
+            } else {
+              // reflect off obstacle
+              const rnx = (b.x - o.x);
+              const rny = (b.y - o.y);
+              const rl = Math.hypot(rnx, rny) || 1;
+              const nnx = rnx / rl, nny = rny / rl;
+              const dot = b.dx * nnx + b.dy * nny;
+              b.dx = b.dx - 2 * dot * nnx;
+              b.dy = b.dy - 2 * dot * nny;
+              b.bounces += 1;
+              b.speed *= 0.85;
+              audio.tick();
+              if (b.bounces > 2) consumed = true;
+            }
+            b.x = nx; b.y = ny;
+            if (!consumed) aliveBullets.push(b);
+            consumed = true; // handled this frame
             break;
           }
         }
-        if (!consumed) {
-          // enemies
-          for (const en of enemiesRef.current) {
-            if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
-              en.hp -= 1;
-              if (en.hp <= 0) {
-                explode(en.x, en.y);
-                audio.boom();
-                enemiesRef.current = enemiesRef.current.filter(e => e.id !== en.id);
-              }
-              consumed = true;
-              break;
+        if (consumed) continue;
+
+        // enemies
+        let hitEnemy = false;
+        for (const en of enemiesRef.current) {
+          if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
+            en.hp -= 1;
+            sparks(en.x, en.y);
+            if (en.hp <= 0) {
+              explode(en.x, en.y, en.kind === "tank");
+              audio.boom();
+              enemiesRef.current = enemiesRef.current.filter(e => e.id !== en.id);
+              if (activeTargetRef.current === en.id) activeTargetRef.current = null;
+              registerKill();
             }
+            hitEnemy = true;
+            break;
           }
         }
+        if (hitEnemy) continue;
 
         b.x = nx; b.y = ny;
-        if (!consumed && b.life > 0 && b.x > -60 && b.x < w + 60 && b.y > -60 && b.y < h + 60) {
+        if (b.life > 0 && b.x > -60 && b.x < w + 60 && b.y > -60 && b.y < h + 60) {
           aliveBullets.push(b);
         }
       }
@@ -557,7 +713,6 @@ export default function TypingTowerGame() {
       }
       if (recoilRef.current > 0) recoilRef.current = Math.max(0, recoilRef.current - dt * 40);
 
-      // Smoothly rotate to last fire target (no auto-acquire)
       let diff = targetAngleRef.current - turretAngleRef.current;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
@@ -589,9 +744,8 @@ export default function TypingTowerGame() {
       for (let x = 0; x < w; x += 60) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
       for (let y = 0; y < h; y += 60) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
 
-      // Paths (roads)
+      // Paths
       for (const p of pathsRef.current) {
-        // dark outline
         ctx.strokeStyle = "#1a1612";
         ctx.lineWidth = config.pathWidth + 6;
         ctx.lineCap = "round";
@@ -600,11 +754,9 @@ export default function TypingTowerGame() {
         ctx.moveTo(p.points[0].x, p.points[0].y);
         for (let i = 1; i < p.points.length; i++) ctx.lineTo(p.points[i].x, p.points[i].y);
         ctx.stroke();
-        // dirt fill
         ctx.strokeStyle = "#5a4632";
         ctx.lineWidth = config.pathWidth;
         ctx.stroke();
-        // center scuff
         ctx.strokeStyle = "rgba(0,0,0,0.18)";
         ctx.lineWidth = 4;
         ctx.setLineDash([14, 18]);
@@ -612,37 +764,32 @@ export default function TypingTowerGame() {
         ctx.setLineDash([]);
       }
 
-      // Obstacles (poles)
+      // Obstacles
       for (const o of obstaclesRef.current) {
         ctx.fillStyle = "rgba(0,0,0,0.5)";
         ctx.beginPath(); ctx.ellipse(o.x + 2, o.y + 4, o.r + 2, (o.r + 2) * 0.5, 0, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = "#3a2e22";
         ctx.beginPath(); ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "#1a1410";
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        ctx.strokeStyle = "#1a1410"; ctx.lineWidth = 2; ctx.stroke();
         ctx.fillStyle = "rgba(255,255,255,0.08)";
         ctx.beginPath(); ctx.arc(o.x - o.r * 0.3, o.y - o.r * 0.3, o.r * 0.4, 0, Math.PI * 2); ctx.fill();
       }
 
-      // Bullets — tracer with strong glow + length scaling with speed
+      // Bullets
       for (const b of bulletsRef.current) {
         const len = Math.min(34, 10 + b.speed / 70);
         const ux = b.dx, uy = b.dy;
         const tx = b.x - ux * len, ty = b.y - uy * len;
-        // outer glow
         ctx.strokeStyle = "rgba(255,180,80,0.35)";
         ctx.lineWidth = 7;
         ctx.lineCap = "round";
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
-        // bright core
         const grad = ctx.createLinearGradient(tx, ty, b.x, b.y);
         grad.addColorStop(0, "rgba(255,220,120,0)");
         grad.addColorStop(1, "rgba(255,255,220,1)");
         ctx.strokeStyle = grad;
         ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
-        // head
         ctx.fillStyle = "#fffbe6";
         ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fill();
         ctx.lineCap = "butt";
@@ -650,39 +797,57 @@ export default function TypingTowerGame() {
 
       // Enemies
       for (const en of enemiesRef.current) {
+        const isActive = activeTargetRef.current === en.id;
         ctx.fillStyle = "rgba(0,0,0,0.4)";
         ctx.beginPath();
         ctx.ellipse(en.x + 3, en.y + 5, en.radius, en.radius * 0.6, 0, 0, Math.PI * 2);
         ctx.fill();
-        // color tint by speed (fast = redder)
-        const sNorm = (en.speed - config.enemySpeedMin) / (config.enemySpeedMax - config.enemySpeedMin);
-        const r = Math.floor(90 + sNorm * 110);
-        const g = Math.floor(107 - sNorm * 50);
-        const bb = Math.floor(58 - sNorm * 30);
-        ctx.fillStyle = `rgb(${r},${g},${bb})`;
+        // body color by kind
+        let bodyR = 90, bodyG = 107, bodyB = 58;
+        if (en.kind === "runner") { bodyR = 170; bodyG = 60; bodyB = 45; }
+        else if (en.kind === "tank") { bodyR = 60; bodyG = 60; bodyB = 60; }
+        else if (en.kind === "weaver") { bodyR = 110; bodyG = 90; bodyB = 140; }
+        ctx.fillStyle = `rgb(${bodyR},${bodyG},${bodyB})`;
         ctx.beginPath(); ctx.arc(en.x, en.y, en.radius, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = "#2e3a1f"; ctx.lineWidth = 2; ctx.stroke();
-        ctx.fillStyle = "#3d4a26";
+        ctx.strokeStyle = isActive ? "#ffcc33" : "#2e3a1f";
+        ctx.lineWidth = isActive ? 3 : 2;
+        ctx.stroke();
+        if (en.kind === "tank") {
+          // turret hint
+          ctx.fillStyle = "#333";
+          ctx.fillRect(en.x - 4, en.y - en.radius * 0.5, en.radius * 0.9, 8);
+        }
+        ctx.fillStyle = "rgba(255,255,255,0.12)";
         ctx.beginPath();
         ctx.arc(en.x - 5, en.y - 4, 5, 0, Math.PI * 2);
         ctx.arc(en.x + 6, en.y + 3, 4, 0, Math.PI * 2);
         ctx.fill();
 
-        const label = en.letter;
+        // Label: split into typed (dim) and remaining (bright)
+        const label = en.word;
         ctx.font = "bold 22px ui-monospace, Menlo, monospace";
         const tw = ctx.measureText(label).width;
-        const padX = 8;
+        const padX = 10;
         const bx = en.x - tw / 2 - padX;
-        const by = en.y - en.radius - 32;
+        const by = en.y - en.radius - 34;
         const bw = tw + padX * 2;
-        const bh = 28;
-        ctx.fillStyle = "rgba(0,0,0,0.85)";
+        const bh = 30;
+        ctx.fillStyle = isActive ? "rgba(30,10,0,0.9)" : "rgba(0,0,0,0.85)";
         ctx.fillRect(bx, by, bw, bh);
-        ctx.strokeStyle = "#ffcc33"; ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
-        ctx.fillStyle = "#ffe066";
+        ctx.strokeStyle = isActive ? "#ff8c2a" : "#ffcc33";
+        ctx.lineWidth = 2; ctx.strokeRect(bx, by, bw, bh);
+        // draw each letter
         ctx.textBaseline = "middle";
+        ctx.textAlign = "left";
+        let cursorX = bx + padX;
+        const midY = by + bh / 2 + 1;
+        for (let i = 0; i < label.length; i++) {
+          const ch = label[i];
+          ctx.fillStyle = i < en.typed ? "rgba(255,255,255,0.28)" : (isActive ? "#ffd966" : "#ffe066");
+          ctx.fillText(ch, cursorX, midY);
+          cursorX += ctx.measureText(ch).width;
+        }
         ctx.textAlign = "center";
-        ctx.fillText(label, en.x, by + bh / 2 + 1);
       }
 
       // Turret
@@ -729,6 +894,9 @@ export default function TypingTowerGame() {
   const banSec = banRemaining > 0 ? (banRemaining / 1000).toFixed(1) : "0.0";
   const banned = banRemaining > 0;
   const missDots = [0, 1, 2, 3];
+  const killPct = Math.min(100, (kills / config.killsPerLevel) * 100);
+  const currentLetters = lettersForLevel(level);
+  const wordLen = targetWordLength(level);
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
@@ -736,9 +904,21 @@ export default function TypingTowerGame() {
 
       <div className="pointer-events-none absolute inset-0 p-4 flex flex-col justify-between text-foreground">
         <div className="flex items-start justify-between">
-          <div className="bg-black/60 border border-white/10 rounded px-3 py-2 font-mono text-sm">
-            <div className="text-white/60">STAGE</div>
-            <div className="text-2xl text-amber-300 font-bold leading-none">{config.stage}</div>
+          <div className="bg-black/60 border border-white/10 rounded px-3 py-2 font-mono text-sm min-w-[240px]">
+            <div className="flex items-baseline justify-between">
+              <span className="text-white/60">LEVEL</span>
+              <span className="text-2xl text-amber-300 font-bold leading-none">{level}</span>
+            </div>
+            <div className="mt-2 flex justify-between text-white/60 text-xs">
+              <span>KILLS</span>
+              <span>{kills}/{config.killsPerLevel}</span>
+            </div>
+            <div className="h-1.5 bg-white/10 rounded overflow-hidden mt-1">
+              <div className="h-full bg-gradient-to-r from-amber-500 to-yellow-200" style={{ width: `${killPct}%` }} />
+            </div>
+            <div className="mt-2 text-white/50 text-[10px] tracking-wider">
+              {wordLen === 1 ? `KEYS: ${currentLetters}` : `WORDS · LEN ${wordLen}`}
+            </div>
           </div>
           <div className="bg-black/60 border border-white/10 rounded px-3 py-2 font-mono text-sm text-right">
             <div className="text-white/60">COMBO</div>
@@ -782,7 +962,15 @@ export default function TypingTowerGame() {
         </div>
       </div>
 
-      {banned && !gameOver && (
+      {showBanner && !gameOver && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+          <div className="font-mono text-amber-300 text-7xl font-black tracking-widest drop-shadow-[0_0_20px_rgba(255,180,50,0.6)]">
+            LEVEL {level}
+          </div>
+        </div>
+      )}
+
+      {banned && !gameOver && !showBanner && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
           <div className="font-mono text-red-500/90 text-6xl font-black tracking-widest animate-pulse">
             JAMMED {banSec}s
