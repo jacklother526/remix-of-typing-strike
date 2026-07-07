@@ -906,20 +906,25 @@ export default function TypingTowerGame() {
         const len = Math.min(34, 10 + b.speed / 70);
         const ux = b.dx, uy = b.dy;
         const tx = b.x - ux * len, ty = b.y - uy * len;
-        ctx.strokeStyle = "rgba(255,180,80,0.35)";
-        ctx.lineWidth = 7;
+        // Color-code special reward bullets.
+        const trail = b.pierce ? "rgba(120,220,255,0.4)" : b.explosive ? "rgba(255,120,60,0.4)" : "rgba(255,180,80,0.35)";
+        const core = b.pierce ? "rgba(200,245,255,1)" : b.explosive ? "rgba(255,210,150,1)" : "rgba(255,255,220,1)";
+        const dot = b.pierce ? "#dff6ff" : b.explosive ? "#ffd9b0" : "#fffbe6";
+        ctx.strokeStyle = trail;
+        ctx.lineWidth = b.pierce || b.explosive ? 9 : 7;
         ctx.lineCap = "round";
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
         const grad = ctx.createLinearGradient(tx, ty, b.x, b.y);
         grad.addColorStop(0, "rgba(255,220,120,0)");
-        grad.addColorStop(1, "rgba(255,255,220,1)");
+        grad.addColorStop(1, core);
         ctx.strokeStyle = grad;
         ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.fillStyle = "#fffbe6";
-        ctx.beginPath(); ctx.arc(b.x, b.y, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = dot;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.pierce || b.explosive ? 4 : 3, 0, Math.PI * 2); ctx.fill();
         ctx.lineCap = "butt";
       }
+
 
       // Enemies
       for (const en of enemiesRef.current) {
