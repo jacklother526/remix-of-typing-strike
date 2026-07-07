@@ -695,6 +695,22 @@ export default function TypingTowerGame() {
       enemiesRef.current = survivors;
 
       // Bullets
+      const killEnemy = (en: Enemy) => {
+        enemiesRef.current = enemiesRef.current.filter(e => e.id !== en.id);
+        if (activeTargetRef.current === en.id) activeTargetRef.current = null;
+        registerKill();
+      };
+      // A bullet that never touched an enemy (blocked / flew off) refunds the
+      // target's letter so the player can simply fire at it again.
+      const refundTarget = (b: Bullet) => {
+        if (b.hitIds.length > 0) return;
+        const en = enemiesRef.current.find(e => e.id === b.targetId);
+        if (en && en.typed > 0) {
+          en.typed -= 1;
+          if (en.word.length > 1 && activeTargetRef.current == null) activeTargetRef.current = en.id;
+        }
+      };
+
       const aliveBullets: Bullet[] = [];
       for (const b of bulletsRef.current) {
         b.speed = Math.min(b.maxSpeed, b.speed + b.accel * dt);
@@ -703,62 +719,95 @@ export default function TypingTowerGame() {
         b.life -= dt;
         let consumed = false;
 
-        // obstacles — with ricochet
-        for (const o of obstaclesRef.current) {
-          if (segCircleHit(b.x, b.y, nx, ny, o.x, o.y, o.r + 2)) {
-            sparks(o.x, o.y);
-            o.hp -= 1;
-            if (o.hp <= 0) {
-              // punch through — bullet continues
-              audio.tick();
-            } else {
-              // reflect off obstacle
-              const rnx = (b.x - o.x);
-              const rny = (b.y - o.y);
-              const rl = Math.hypot(rnx, rny) || 1;
-              const nnx = rnx / rl, nny = rny / rl;
-              const dot = b.dx * nnx + b.dy * nny;
-              b.dx = b.dx - 2 * dot * nnx;
-              b.dy = b.dy - 2 * dot * nny;
-              b.bounces += 1;
-              b.speed *= 0.85;
-              audio.tick();
-              if (b.bounces > 2) consumed = true;
+        // obstacles — with ricochet (piercing bullets ignore obstacles)
+        if (!b.pierce) {
+          for (const o of obstaclesRef.current) {
+            if (segCircleHit(b.x, b.y, nx, ny, o.x, o.y, o.r + 2)) {
+              sparks(o.x, o.y);
+              o.hp -= 1;
+              if (o.hp <= 0) {
+                // punch through — bullet continues
+                audio.tick();
+              } else {
+                // reflect off obstacle
+                const rnx = (b.x - o.x);
+                const rny = (b.y - o.y);
+                const rl = Math.hypot(rnx, rny) || 1;
+                const nnx = rnx / rl, nny = rny / rl;
+                const dot = b.dx * nnx + b.dy * nny;
+                b.dx = b.dx - 2 * dot * nnx;
+                b.dy = b.dy - 2 * dot * nny;
+                b.bounces += 1;
+                b.speed *= 0.85;
+                audio.tick();
+                if (b.bounces > 2) consumed = true;
+              }
+              b.x = nx; b.y = ny;
+              if (!consumed) aliveBullets.push(b);
+              else refundTarget(b);
+              consumed = true; // handled this frame
+              break;
             }
-            b.x = nx; b.y = ny;
-            if (!consumed) aliveBullets.push(b);
-            consumed = true; // handled this frame
-            break;
           }
+          if (consumed) continue;
         }
-        if (consumed) continue;
 
         // enemies
-        let hitEnemy = false;
-        for (const en of enemiesRef.current) {
-          if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
-            en.hp -= 1;
-            sparks(en.x, en.y);
-            if (en.hp <= 0) {
+        if (b.pierce) {
+          // Armor-piercing: destroy every enemy along the path, keep flying.
+          for (const en of [...enemiesRef.current]) {
+            if (b.hitIds.includes(en.id)) continue;
+            if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
+              b.hitIds.push(en.id);
               explode(en.x, en.y, en.kind === "tank");
               audio.boom();
-              enemiesRef.current = enemiesRef.current.filter(e => e.id !== en.id);
-              if (activeTargetRef.current === en.id) activeTargetRef.current = null;
-              registerKill();
+              killEnemy(en);
             }
-            hitEnemy = true;
-            break;
           }
+        } else {
+          let hitEnemy = false;
+          for (const en of enemiesRef.current) {
+            if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
+              b.hitIds.push(en.id);
+              sparks(en.x, en.y);
+              if (b.explosive) {
+                // Detonate: destroy target + nearby enemies.
+                explode(en.x, en.y, true);
+                audio.boom();
+                const ex = en.x, ey = en.y;
+                killEnemy(en);
+                const R = 95;
+                for (const other of [...enemiesRef.current]) {
+                  if (Math.hypot(other.x - ex, other.y - ey) <= R) {
+                    explode(other.x, other.y, other.kind === "tank");
+                    killEnemy(other);
+                  }
+                }
+              } else {
+                en.hp -= 1;
+                if (en.hp <= 0) {
+                  explode(en.x, en.y, en.kind === "tank");
+                  audio.boom();
+                  killEnemy(en);
+                }
+              }
+              hitEnemy = true;
+              break;
+            }
+          }
+          if (hitEnemy) continue;
         }
-        if (hitEnemy) continue;
 
         b.x = nx; b.y = ny;
         if (b.life > 0 && b.x > -60 && b.x < w + 60 && b.y > -60 && b.y < h + 60) {
           aliveBullets.push(b);
+        } else {
+          refundTarget(b);
         }
       }
       bulletsRef.current = aliveBullets;
       obstaclesRef.current = obstaclesRef.current.filter(o => o.hp > 0);
+
 
       // particles
       for (const p of particlesRef.current) {
