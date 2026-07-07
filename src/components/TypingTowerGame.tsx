@@ -1056,7 +1056,13 @@ export default function TypingTowerGame() {
             <div className={`text-2xl font-bold leading-none ${hudCombo >= 10 ? "text-orange-400" : hudCombo >= 5 ? "text-amber-300" : "text-white"}`}>
               x{hudCombo}
             </div>
+            {rewardType && (
+              <div className={`mt-2 text-[11px] font-bold tracking-wide ${rewardType === "pierce" ? "text-cyan-300" : "text-orange-400"}`}>
+                {rewardType === "pierce" ? "⚡ PIERCING" : "💥 EXPLOSIVE"} {(rewardRemaining / 1000).toFixed(1)}s
+              </div>
+            )}
           </div>
+
         </div>
         <div className="flex justify-center gap-3">
           <div className="bg-black/60 border border-white/10 rounded px-3 py-2 w-96 font-mono text-xs">
