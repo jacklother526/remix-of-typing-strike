@@ -635,6 +635,16 @@ export default function TypingTowerGame() {
       const rem = Math.max(0, banUntilRef.current - now);
       setBanRemaining(rem);
 
+      // Reward countdown
+      if (rewardTypeRef.current) {
+        const rr = Math.max(0, rewardUntilRef.current - now);
+        setRewardRemaining(rr);
+        if (rr <= 0) {
+          rewardTypeRef.current = null;
+          setRewardType(null);
+        }
+      }
+
       if (levelBannerRef.current > 0) {
         levelBannerRef.current -= dt;
         if (levelBannerRef.current <= 0) setShowBanner(false);
