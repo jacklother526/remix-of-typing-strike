@@ -44,7 +44,12 @@ type Bullet = {
   targetId: number;
   life: number;
   bounces: number;
+  pierce: boolean;
+  explosive: boolean;
+  hitIds: number[];
 };
+
+type RewardKind = "pierce" | "explosive";
 
 type Particle = {
   x: number; y: number;
