@@ -774,10 +774,26 @@ export default function TypingTowerGame() {
       }
       if (recoilRef.current > 0) recoilRef.current = Math.max(0, recoilRef.current - dt * 40);
 
+      // Aim at the next queued shot's target, rotate, then fire only once aligned.
+      const pending = pendingShotsRef.current;
+      while (pending.length) {
+        const en = enemiesRef.current.find(e => e.id === pending[0].enemyId);
+        if (!en) { pending.shift(); continue; } // target gone, drop the shot
+        targetAngleRef.current = Math.atan2(en.y - cy, en.x - cx);
+        break;
+      }
+
       let diff = targetAngleRef.current - turretAngleRef.current;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
       turretAngleRef.current += diff * Math.min(1, dt * 18);
+
+      // Fire the queued shot once the barrel points at the target.
+      if (pending.length && Math.abs(diff) < 0.1) {
+        const en = enemiesRef.current.find(e => e.id === pending[0].enemyId);
+        if (en) spawnBullet(en);
+        pending.shift();
+      }
 
       draw();
       raf = requestAnimationFrame(loop);
