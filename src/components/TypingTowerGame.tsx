@@ -241,6 +241,10 @@ export default function TypingTowerGame() {
   const killsRef = useRef(0);
   const activeTargetRef = useRef<number | null>(null); // enemy id being typed in word mode
   const levelBannerRef = useRef(0); // sec remaining to display "LEVEL X"
+  const pendingShotsRef = useRef<{ enemyId: number }[]>([]); // shots waiting for turret to aim
+  const killTimesRef = useRef<number[]>([]); // timestamps (ms) of recent kills for combo reward
+  const rewardUntilRef = useRef(0); // performance.now() until which a reward is active
+  const rewardTypeRef = useRef<RewardKind | null>(null);
 
   const audio = useAudio();
 
