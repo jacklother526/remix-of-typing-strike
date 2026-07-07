@@ -421,7 +421,13 @@ export default function TypingTowerGame() {
     return Math.min(v, config.bulletSpeedMax);
   };
 
-  const fireAt = (enemy: Enemy) => {
+  // Queue a shot: the turret must rotate to face the target before firing.
+  const queueShot = (enemy: Enemy) => {
+    pendingShotsRef.current.push({ enemyId: enemy.id });
+  };
+
+  // Actually spawn the bullet once the turret is aimed. Applies active reward.
+  const spawnBullet = (enemy: Enemy) => {
     const { w, h } = sizeRef.current;
     const cx = w * 0.93, cy = h * 0.5;
     const dx = enemy.x - cx;
@@ -433,6 +439,8 @@ export default function TypingTowerGame() {
     const maxSpeed = launchSpeed * 2;
     const accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     const ang = Math.atan2(dy, dx);
+    const rewardActive = performance.now() < rewardUntilRef.current;
+    const kind = rewardActive ? rewardTypeRef.current : null;
     bulletsRef.current.push({
       id: nextId(),
       x: cx, y: cy,
@@ -441,16 +449,38 @@ export default function TypingTowerGame() {
       targetId: enemy.id,
       life: 1.5,
       bounces: 0,
+      pierce: kind === "pierce",
+      explosive: kind === "explosive",
+      hitIds: [],
     });
-    targetAngleRef.current = ang;
     recoilRef.current = 8;
     muzzleRef.current = { angle: ang, life: 0.08 };
     audio.shot();
   };
 
+  // Grant a combo reward: 10 kills within 10 seconds.
+  const REWARD_LIST: RewardKind[] = ["pierce", "explosive"];
+  const maybeGrantReward = () => {
+    const now = performance.now();
+    killTimesRef.current.push(now);
+    killTimesRef.current = killTimesRef.current.filter((t) => now - t <= 10000);
+    if (killTimesRef.current.length >= 10) {
+      killTimesRef.current = [];
+      const kind = REWARD_LIST[Math.floor(Math.random() * REWARD_LIST.length)];
+      // Higher combo => longer reward (10s), otherwise 5s.
+      const durationMs = comboRef.current >= 20 ? 10000 : 5000;
+      rewardTypeRef.current = kind;
+      rewardUntilRef.current = now + durationMs;
+      setRewardType(kind);
+      setRewardRemaining(durationMs);
+      audio.boom();
+    }
+  };
+
   const registerKill = () => {
     killsRef.current += 1;
     setKills(killsRef.current);
+    maybeGrantReward();
     if (killsRef.current >= config.killsPerLevel) {
       // Advance level
       killsRef.current = 0;
@@ -463,6 +493,7 @@ export default function TypingTowerGame() {
       // Clear old-level enemies visually (leave bullets)
       enemiesRef.current = [];
       activeTargetRef.current = null;
+      pendingShotsRef.current = [];
       audio.boom();
     }
   };
