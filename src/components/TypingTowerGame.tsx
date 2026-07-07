@@ -540,15 +540,14 @@ export default function TypingTowerGame() {
       };
 
       if (target) {
-        // Locked: expect target.word[target.typed] === k
+        // Locked word: expect the next un-fired letter.
         const expected = target.word[target.typed];
         if (expected === k) {
           target.typed += 1;
-          fireAt(target);
-          if (target.typed >= target.word.length) {
-            // final hit resolved when bullet lands
-            target.hp = 1; // last chunk
-          }
+          queueShot(target);
+          // Once the whole word is queued, release the lock so the player
+          // can move on; the enemy is destroyed as the bullets land.
+          if (target.typed >= target.word.length) activeTargetRef.current = null;
           comboRef.current += 1;
           setHudCombo(comboRef.current);
           if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
@@ -558,21 +557,25 @@ export default function TypingTowerGame() {
         return;
       }
 
-      // Not locked: find any enemy whose FIRST letter matches
+      // Not locked: fire at the CLOSEST enemy whose next-needed letter matches.
+      // No per-target shot limit — the player can keep firing freely.
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
       let best: Enemy | null = null;
       let bestD = Infinity;
       for (const en of enemiesRef.current) {
-        if (en.typed === 0 && en.word[0] === k) {
+        const idx = en.typed;
+        if (idx < en.word.length && en.word[idx] === k) {
           const d = Math.hypot(en.x - cx, en.y - cy);
           if (d < bestD) { bestD = d; best = en; }
         }
       }
       if (best) {
-        best.typed = 1;
-        fireAt(best);
-        if (best.word.length > 1) activeTargetRef.current = best.id;
+        best.typed += 1;
+        queueShot(best);
+        if (best.word.length > 1 && best.typed < best.word.length) {
+          activeTargetRef.current = best.id;
+        }
         comboRef.current += 1;
         setHudCombo(comboRef.current);
         if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
