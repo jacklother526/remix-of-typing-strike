@@ -600,6 +600,10 @@ export default function TypingTowerGame() {
     levelRef.current = 1;
     killsRef.current = 0;
     activeTargetRef.current = null;
+    pendingShotsRef.current = [];
+    killTimesRef.current = [];
+    rewardUntilRef.current = 0;
+    rewardTypeRef.current = null;
     setHudCombo(0);
     setHudHealth(config.playerHealth);
     setGameOver(false);
@@ -607,6 +611,8 @@ export default function TypingTowerGame() {
     setBanRemaining(0);
     setLevel(1);
     setKills(0);
+    setRewardType(null);
+    setRewardRemaining(0);
     buildLevel();
   };
 
