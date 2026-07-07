@@ -6,7 +6,7 @@
   "bulletSpeedGrowthPerSec": 14,
   "bulletSpeedMax": 2800,
   "bulletJitter": 0.15,
-  "playerHealth": 100,
+  "playerHealth": 1000,
   "enemyDamage": 10,
   "obstacleCount": 10,
   "pathWidth": 60,
