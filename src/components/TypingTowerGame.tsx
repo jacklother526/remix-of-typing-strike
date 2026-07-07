@@ -256,6 +256,8 @@ export default function TypingTowerGame() {
   const [level, setLevel] = useState(1);
   const [kills, setKills] = useState(0);
   const [showBanner, setShowBanner] = useState(false);
+  const [rewardType, setRewardType] = useState<RewardKind | null>(null);
+  const [rewardRemaining, setRewardRemaining] = useState(0);
 
   const buildLevel = () => {
     const { w, h } = sizeRef.current;
