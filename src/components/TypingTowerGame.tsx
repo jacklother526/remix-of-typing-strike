@@ -1004,29 +1004,51 @@ export default function TypingTowerGame() {
         ctx.beginPath(); ctx.arc(o.x - o.r * 0.3, o.y - o.r * 0.3, o.r * 0.4, 0, Math.PI * 2); ctx.fill();
       }
 
-      // Bullets
+      // Beams (laser / electric)
+      for (const bm of beamsRef.current) {
+        const a = Math.max(0, Math.min(1, bm.life / 0.16));
+        ctx.globalAlpha = a;
+        ctx.strokeStyle = bm.color;
+        ctx.lineWidth = 6;
+        ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(bm.x1, bm.y1); ctx.lineTo(bm.x2, bm.y2); ctx.stroke();
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(bm.x1, bm.y1); ctx.lineTo(bm.x2, bm.y2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.lineCap = "butt";
+
+      // Bullets — color-coded by mode.
+      const bulletColors: Record<BulletMode, { trail: string; core: string; dot: string }> = {
+        normal: { trail: "rgba(255,180,80,0.35)", core: "rgba(255,255,220,1)", dot: "#fffbe6" },
+        pierce: { trail: "rgba(120,220,255,0.4)", core: "rgba(200,245,255,1)", dot: "#dff6ff" },
+        explosive: { trail: "rgba(255,120,60,0.4)", core: "rgba(255,210,150,1)", dot: "#ffd9b0" },
+        bounce: { trail: "rgba(180,120,255,0.4)", core: "rgba(225,200,255,1)", dot: "#e8ddff" },
+        laser: { trail: "rgba(125,249,255,0.5)", core: "rgba(230,255,255,1)", dot: "#e6ffff" },
+        electric: { trail: "rgba(120,200,255,0.5)", core: "rgba(210,240,255,1)", dot: "#d2f0ff" },
+      };
       for (const b of bulletsRef.current) {
         const len = Math.min(34, 10 + b.speed / 70);
         const ux = b.dx, uy = b.dy;
         const tx = b.x - ux * len, ty = b.y - uy * len;
-        // Color-code special reward bullets.
-        const trail = b.pierce ? "rgba(120,220,255,0.4)" : b.explosive ? "rgba(255,120,60,0.4)" : "rgba(255,180,80,0.35)";
-        const core = b.pierce ? "rgba(200,245,255,1)" : b.explosive ? "rgba(255,210,150,1)" : "rgba(255,255,220,1)";
-        const dot = b.pierce ? "#dff6ff" : b.explosive ? "#ffd9b0" : "#fffbe6";
-        ctx.strokeStyle = trail;
-        ctx.lineWidth = b.pierce || b.explosive ? 9 : 7;
+        const special = b.mode !== "normal";
+        const cc = bulletColors[b.mode];
+        ctx.strokeStyle = cc.trail;
+        ctx.lineWidth = special ? 9 : 7;
         ctx.lineCap = "round";
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
         const grad = ctx.createLinearGradient(tx, ty, b.x, b.y);
         grad.addColorStop(0, "rgba(255,220,120,0)");
-        grad.addColorStop(1, core);
+        grad.addColorStop(1, cc.core);
         ctx.strokeStyle = grad;
         ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.fillStyle = dot;
-        ctx.beginPath(); ctx.arc(b.x, b.y, b.pierce || b.explosive ? 4 : 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = cc.dot;
+        ctx.beginPath(); ctx.arc(b.x, b.y, special ? 4 : 3, 0, Math.PI * 2); ctx.fill();
         ctx.lineCap = "butt";
       }
+
 
 
       // Enemies
