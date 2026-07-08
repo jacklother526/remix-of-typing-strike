@@ -699,23 +699,25 @@ export default function TypingTowerGame() {
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
 
-      // Move enemies along path + sway
+      // Move enemies along path, offset by their lane + weaver sway (inside road).
       for (const en of enemiesRef.current) {
         en.age += dt;
         en.t += en.speed * dt;
         const p = pathsRef.current[en.pathIdx];
         const pos = pointOnPath(p, en.t);
         en.baseX = pos.x; en.baseY = pos.y;
-        if (en.sway > 0) {
+        const swayS = en.sway > 0 ? Math.sin(en.age * en.swayFreq + en.swayPhase) * en.sway : 0;
+        const offset = en.lane + swayS;
+        if (offset !== 0) {
           const tan = pathTangent(p, en.t);
           const nx = -tan.y, ny = tan.x;
-          const s = Math.sin(en.age * en.swayFreq + en.swayPhase) * en.sway;
-          en.x = pos.x + nx * s;
-          en.y = pos.y + ny * s;
+          en.x = pos.x + nx * offset;
+          en.y = pos.y + ny * offset;
         } else {
           en.x = pos.x; en.y = pos.y;
         }
       }
+
 
       // Enemy reaches turret
       const survivors: Enemy[] = [];
