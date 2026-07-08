@@ -1154,6 +1154,12 @@ export default function TypingTowerGame() {
   const killPct = Math.min(100, (kills / killGoal) * 100);
   const currentLetters = lettersForLevel(level);
   const wordLen = targetWordLength(level);
+  const unlockedSpecials = [
+    level >= 4 ? "💥" : null,
+    level >= 5 ? "🎯" : null,
+    level >= 6 ? "⚡" : null,
+    level >= 7 ? "🔷" : null,
+  ].filter(Boolean) as string[];
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
