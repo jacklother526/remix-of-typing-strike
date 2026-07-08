@@ -8,7 +8,11 @@ import {
   pickEnemyKind,
   pickWord,
   pickLetter,
+  killsForLevel,
+  repeatCountForLevel,
+  rollSpecialShot,
   type EnemyKind,
+  type SpecialKind,
 } from "@/lib/game-progression";
 
 type Vec = { x: number; y: number };
@@ -27,11 +31,15 @@ type Enemy = {
   hp: number;        // matches remaining letters
   speed: number;
   radius: number;
+  lane: number;      // constant lateral offset inside the road (px)
   sway: number;      // amplitude px
   swayFreq: number;  // rad/s
   swayPhase: number;
   age: number;
 };
+
+// Combo rewards: pierce/explosive. Special shots: bounce/laser/electric/explosive.
+type BulletMode = "normal" | "pierce" | "explosive" | "bounce" | "laser" | "electric";
 
 type Bullet = {
   id: number;
@@ -43,9 +51,9 @@ type Bullet = {
   maxSpeed: number;
   targetId: number;
   life: number;
-  bounces: number;
-  pierce: boolean;
-  explosive: boolean;
+  bounces: number;      // ricochets off obstacles
+  mode: BulletMode;
+  bounceHits: number;   // enemy bounces used (bounce mode)
   hitIds: number[];
 };
 
@@ -61,6 +69,8 @@ type Particle = {
 type Obstacle = { x: number; y: number; r: number; hp: number };
 
 type MuzzleFlash = { angle: number; life: number };
+
+type Beam = { x1: number; y1: number; x2: number; y2: number; life: number; color: string };
 
 type Path = {
   points: Vec[];
@@ -225,6 +235,8 @@ export default function TypingTowerGame() {
   const obstaclesRef = useRef<Obstacle[]>([]);
   const pathsRef = useRef<Path[]>([]);
   const muzzleRef = useRef<MuzzleFlash | null>(null);
+  const beamsRef = useRef<Beam[]>([]);
+  const lastFireRef = useRef(0); // performance.now() of last shot (fire-rate gate)
   const turretAngleRef = useRef(Math.PI);
   const targetAngleRef = useRef(Math.PI);
   const recoilRef = useRef(0);
@@ -340,14 +352,17 @@ export default function TypingTowerGame() {
     const wordLen = targetWordLength(lvl);
     let word: string;
     if (wordLen === 1) {
-      word = pickLetter(lvl);
+      // Single-letter phase: same letter may repeat 2x or 3x at higher levels.
+      const letter = pickLetter(lvl);
+      const reps = kind === "tank" ? Math.min(3, repeatCountForLevel(lvl) + 1) : repeatCountForLevel(lvl);
+      word = letter.repeat(reps);
     } else {
       // Tanks get a longer word
       const useLen = kind === "tank" ? Math.min(8, wordLen + 1) : wordLen;
       word = pickWord(useLen);
     }
 
-    // Speed by kind
+    // Speed by kind + wider variety (some enemies are much faster).
     const mul = enemySpeedMultiplier(lvl, elapsedRef.current);
     const baseSpeed = config.enemySpeedMin + Math.random() * (config.enemySpeedMax - config.enemySpeedMin);
     let speed = baseSpeed * mul;
@@ -358,6 +373,13 @@ export default function TypingTowerGame() {
     if (kind === "runner") { speed *= 1.5; radius = 15; }
     else if (kind === "tank") { speed *= 0.55; radius = 26; }
     else if (kind === "weaver") { sway = 22; swayFreq = 3.4; }
+
+    // ~14% of non-tanks get a burst of much higher speed.
+    if (kind !== "tank" && Math.random() < 0.14) speed *= 1.9 + Math.random() * 1.3;
+
+    // Lateral lane offset so targets fill the road width (not just the centerline).
+    const half = config.pathWidth / 2 - radius - 2;
+    const lane = half > 0 ? (Math.random() * 2 - 1) * half : 0;
 
     enemiesRef.current.push({
       id: nextId(),
@@ -371,12 +393,14 @@ export default function TypingTowerGame() {
       hp: word.length,
       speed,
       radius,
+      lane,
       sway,
       swayFreq,
       swayPhase: Math.random() * Math.PI * 2,
       age: 0,
     });
   };
+
 
   const explode = (x: number, y: number, big = false) => {
     const n = big ? 40 : 24;
@@ -426,37 +450,58 @@ export default function TypingTowerGame() {
     pendingShotsRef.current.push({ enemyId: enemy.id });
   };
 
-  // Actually spawn the bullet once the turret is aimed. Applies active reward.
+  // Actually spawn the bullet once the turret is aimed.
+  // Special shots (chance-based, by level) take priority over combo rewards.
   const spawnBullet = (enemy: Enemy) => {
     const { w, h } = sizeRef.current;
     const cx = w * 0.93, cy = h * 0.5;
     const dx = enemy.x - cx;
     const dy = enemy.y - cy;
     const len = Math.hypot(dx, dy) || 1;
-    const base = currentBulletSpeed();
-    const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
-    const launchSpeed = base * jitter;
-    const maxSpeed = launchSpeed * 2;
-    const accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     const ang = Math.atan2(dy, dx);
-    const rewardActive = performance.now() < rewardUntilRef.current;
-    const kind = rewardActive ? rewardTypeRef.current : null;
+    const now = performance.now();
+
+    // Decide bullet mode: special roll wins; otherwise fall back to combo reward.
+    let mode: BulletMode = "normal";
+    const special = rollSpecialShot(levelRef.current);
+    if (special) {
+      mode = special;
+    } else if (now < rewardUntilRef.current && rewardTypeRef.current) {
+      mode = rewardTypeRef.current;
+    }
+
+    let launchSpeed: number;
+    let maxSpeed: number;
+    let accel: number;
+    if (mode === "laser") {
+      // Instant hit: extreme speed so the first frame's segment reaches the target.
+      launchSpeed = 60000; maxSpeed = 60000; accel = 0;
+    } else {
+      const base = currentBulletSpeed();
+      const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
+      launchSpeed = base * jitter;
+      maxSpeed = launchSpeed * 2;
+      accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
+    }
+
     bulletsRef.current.push({
       id: nextId(),
       x: cx, y: cy,
       dx: dx / len, dy: dy / len,
       speed: launchSpeed, launchSpeed, accel, maxSpeed,
       targetId: enemy.id,
-      life: 1.5,
+      life: mode === "laser" ? 0.06 : 1.5,
       bounces: 0,
-      pierce: kind === "pierce",
-      explosive: kind === "explosive",
+      mode,
+      bounceHits: 0,
       hitIds: [],
     });
     recoilRef.current = 8;
     muzzleRef.current = { angle: ang, life: 0.08 };
+    if (mode === "laser") beamsRef.current.push({ x1: cx, y1: cy, x2: enemy.x, y2: enemy.y, life: 0.12, color: "#7df9ff" });
     audio.shot();
   };
+
 
   // Grant a combo reward: 10 kills within 10 seconds.
   const REWARD_LIST: RewardKind[] = ["pierce", "explosive"];
@@ -481,7 +526,7 @@ export default function TypingTowerGame() {
     killsRef.current += 1;
     setKills(killsRef.current);
     maybeGrantReward();
-    if (killsRef.current >= config.killsPerLevel) {
+    if (killsRef.current >= killsForLevel(levelRef.current)) {
       // Advance level
       killsRef.current = 0;
       setKills(0);
@@ -513,12 +558,27 @@ export default function TypingTowerGame() {
         return;
       }
 
-      // If a target is locked (word mid-type), only its next letter counts.
-      let target: Enemy | null = null;
-      if (activeTargetRef.current != null) {
-        target = enemiesRef.current.find(e => e.id === activeTargetRef.current) || null;
-        if (!target) activeTargetRef.current = null;
-      }
+
+      // Soft word lock: if a word is mid-type and its next letter matches, keep
+      // going. If it doesn't match, DON'T penalize — fall through and try to hit
+      // any other enemy that holds this letter (rotate to an existing target).
+      const active = activeTargetRef.current != null
+        ? enemiesRef.current.find(e => e.id === activeTargetRef.current) || null
+        : null;
+      if (!active) activeTargetRef.current = null;
+
+      const registerHit = (en: Enemy) => {
+        en.typed += 1;
+        queueShot(en);
+        if (en.word.length > 1 && en.typed < en.word.length) {
+          activeTargetRef.current = en.id;
+        } else if (activeTargetRef.current === en.id) {
+          activeTargetRef.current = null;
+        }
+        comboRef.current += 1;
+        setHudCombo(comboRef.current);
+        if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
+      };
 
       const registerMiss = () => {
         comboRef.current = 0;
@@ -539,26 +599,15 @@ export default function TypingTowerGame() {
         }
       };
 
-      if (target) {
-        // Locked word: expect the next un-fired letter.
-        const expected = target.word[target.typed];
-        if (expected === k) {
-          target.typed += 1;
-          queueShot(target);
-          // Once the whole word is queued, release the lock so the player
-          // can move on; the enemy is destroyed as the bullets land.
-          if (target.typed >= target.word.length) activeTargetRef.current = null;
-          comboRef.current += 1;
-          setHudCombo(comboRef.current);
-          if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
-        } else {
-          registerMiss();
-        }
+      // 1) Continue the active word if the next letter matches.
+      if (active && active.word[active.typed] === k) {
+        registerHit(active);
         return;
       }
 
-      // Not locked: fire at the CLOSEST enemy whose next-needed letter matches.
-      // No per-target shot limit — the player can keep firing freely.
+      // 2) Otherwise, fire at the CLOSEST enemy whose next-needed letter matches.
+      //    (No target is greyed out or blocked — any enemy holding this letter
+      //     is a valid target.)
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
       let best: Enemy | null = null;
@@ -571,15 +620,9 @@ export default function TypingTowerGame() {
         }
       }
       if (best) {
-        best.typed += 1;
-        queueShot(best);
-        if (best.word.length > 1 && best.typed < best.word.length) {
-          activeTargetRef.current = best.id;
-        }
-        comboRef.current += 1;
-        setHudCombo(comboRef.current);
-        if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
+        registerHit(best);
       } else {
+        // Truly no enemy holds this letter → this is a mistake.
         registerMiss();
       }
     };
@@ -587,10 +630,13 @@ export default function TypingTowerGame() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+
   const restart = () => {
     enemiesRef.current = [];
     bulletsRef.current = [];
     particlesRef.current = [];
+    beamsRef.current = [];
+    lastFireRef.current = 0;
     comboRef.current = 0;
     elapsedRef.current = 0;
     healthRef.current = config.playerHealth;
