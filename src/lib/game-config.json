@@ -1,7 +1,7 @@
 {
   "spawnIntervalMs": 1500,
   "enemySpeedMin": 26,
-  "enemySpeedMax": 70,
+  "enemySpeedMax": 90,
   "bulletSpeedBase": 1100,
   "bulletSpeedGrowthPerSec": 14,
   "bulletSpeedMax": 2800,
@@ -10,5 +10,7 @@
   "enemyDamage": 10,
   "obstacleCount": 10,
   "pathWidth": 60,
-  "killsPerLevel": 100
+  "killsPerLevel": 100,
+  "fireRatePerSec": 3,
+  "turretRotSpeedDeg": 60
 }

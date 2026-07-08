@@ -100,3 +100,59 @@ export function pickLetter(level: number): string {
   const set = lettersForLevel(level);
   return set[Math.floor(Math.random() * set.length)];
 }
+
+// Kills needed to clear a level.
+//  L1-5  -> 50 each
+//  L6-10 -> 75 each
+//  L11+  -> 100 each
+export function killsForLevel(level: number): number {
+  if (level <= 5) return 50;
+  if (level <= 10) return 75;
+  return 100;
+}
+
+// ---- Chance-based special shots (permanent, unlocked by level) ----
+// explosive L4, bounce L5, laser L6, electric L7.
+// Base 1% at unlock, +1% every 2 levels, capped at 10%.
+export type SpecialKind = "explosive" | "bounce" | "laser" | "electric";
+
+const SPECIAL_UNLOCK: Record<SpecialKind, number> = {
+  explosive: 4,
+  bounce: 5,
+  laser: 6,
+  electric: 7,
+};
+
+export function specialChance(level: number, kind: SpecialKind): number {
+  const unlock = SPECIAL_UNLOCK[kind];
+  if (level < unlock) return 0;
+  return Math.min(10, 1 + Math.floor((level - unlock) / 2)) / 100;
+}
+
+// Roll for a special shot. If several succeed, pick one at random.
+export function rollSpecialShot(level: number): SpecialKind | null {
+  const kinds: SpecialKind[] = ["explosive", "bounce", "laser", "electric"];
+  const hits = kinds.filter((k) => Math.random() < specialChance(level, k));
+  if (hits.length === 0) return null;
+  return hits[Math.floor(Math.random() * hits.length)];
+}
+
+// ---- Repeated-letter targets (single-letter phase, levels <= 10) ----
+// Double: after level 3 (from L4), 3% +1% every 2 levels, cap 30%.
+export function doubleLetterChance(level: number): number {
+  if (level < 4) return 0;
+  return Math.min(0.3, 0.03 + Math.floor((level - 4) / 2) * 0.01);
+}
+// Triple: after level 4 (from L5), 1% +1% every 2 levels, cap 10%.
+export function tripleLetterChance(level: number): number {
+  if (level < 5) return 0;
+  return Math.min(0.1, 0.01 + Math.floor((level - 5) / 2) * 0.01);
+}
+
+// How many times a single-letter target repeats (1, 2 or 3).
+export function repeatCountForLevel(level: number): number {
+  if (Math.random() < tripleLetterChance(level)) return 3;
+  if (Math.random() < doubleLetterChance(level)) return 2;
+  return 1;
+}
+

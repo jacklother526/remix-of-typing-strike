@@ -8,7 +8,11 @@ import {
   pickEnemyKind,
   pickWord,
   pickLetter,
+  killsForLevel,
+  repeatCountForLevel,
+  rollSpecialShot,
   type EnemyKind,
+  type SpecialKind,
 } from "@/lib/game-progression";
 
 type Vec = { x: number; y: number };
@@ -27,11 +31,15 @@ type Enemy = {
   hp: number;        // matches remaining letters
   speed: number;
   radius: number;
+  lane: number;      // constant lateral offset inside the road (px)
   sway: number;      // amplitude px
   swayFreq: number;  // rad/s
   swayPhase: number;
   age: number;
 };
+
+// Combo rewards: pierce/explosive. Special shots: bounce/laser/electric/explosive.
+type BulletMode = "normal" | "pierce" | "explosive" | "bounce" | "laser" | "electric";
 
 type Bullet = {
   id: number;
@@ -43,9 +51,9 @@ type Bullet = {
   maxSpeed: number;
   targetId: number;
   life: number;
-  bounces: number;
-  pierce: boolean;
-  explosive: boolean;
+  bounces: number;      // ricochets off obstacles
+  mode: BulletMode;
+  bounceHits: number;   // enemy bounces used (bounce mode)
   hitIds: number[];
 };
 
@@ -61,6 +69,8 @@ type Particle = {
 type Obstacle = { x: number; y: number; r: number; hp: number };
 
 type MuzzleFlash = { angle: number; life: number };
+
+type Beam = { x1: number; y1: number; x2: number; y2: number; life: number; color: string };
 
 type Path = {
   points: Vec[];
@@ -225,6 +235,8 @@ export default function TypingTowerGame() {
   const obstaclesRef = useRef<Obstacle[]>([]);
   const pathsRef = useRef<Path[]>([]);
   const muzzleRef = useRef<MuzzleFlash | null>(null);
+  const beamsRef = useRef<Beam[]>([]);
+  const lastFireRef = useRef(0); // performance.now() of last shot (fire-rate gate)
   const turretAngleRef = useRef(Math.PI);
   const targetAngleRef = useRef(Math.PI);
   const recoilRef = useRef(0);
@@ -340,14 +352,17 @@ export default function TypingTowerGame() {
     const wordLen = targetWordLength(lvl);
     let word: string;
     if (wordLen === 1) {
-      word = pickLetter(lvl);
+      // Single-letter phase: same letter may repeat 2x or 3x at higher levels.
+      const letter = pickLetter(lvl);
+      const reps = kind === "tank" ? Math.min(3, repeatCountForLevel(lvl) + 1) : repeatCountForLevel(lvl);
+      word = letter.repeat(reps);
     } else {
       // Tanks get a longer word
       const useLen = kind === "tank" ? Math.min(8, wordLen + 1) : wordLen;
       word = pickWord(useLen);
     }
 
-    // Speed by kind
+    // Speed by kind + wider variety (some enemies are much faster).
     const mul = enemySpeedMultiplier(lvl, elapsedRef.current);
     const baseSpeed = config.enemySpeedMin + Math.random() * (config.enemySpeedMax - config.enemySpeedMin);
     let speed = baseSpeed * mul;
@@ -358,6 +373,13 @@ export default function TypingTowerGame() {
     if (kind === "runner") { speed *= 1.5; radius = 15; }
     else if (kind === "tank") { speed *= 0.55; radius = 26; }
     else if (kind === "weaver") { sway = 22; swayFreq = 3.4; }
+
+    // ~14% of non-tanks get a burst of much higher speed.
+    if (kind !== "tank" && Math.random() < 0.14) speed *= 1.9 + Math.random() * 1.3;
+
+    // Lateral lane offset so targets fill the road width (not just the centerline).
+    const half = config.pathWidth / 2 - radius - 2;
+    const lane = half > 0 ? (Math.random() * 2 - 1) * half : 0;
 
     enemiesRef.current.push({
       id: nextId(),
@@ -371,12 +393,14 @@ export default function TypingTowerGame() {
       hp: word.length,
       speed,
       radius,
+      lane,
       sway,
       swayFreq,
       swayPhase: Math.random() * Math.PI * 2,
       age: 0,
     });
   };
+
 
   const explode = (x: number, y: number, big = false) => {
     const n = big ? 40 : 24;
@@ -426,37 +450,58 @@ export default function TypingTowerGame() {
     pendingShotsRef.current.push({ enemyId: enemy.id });
   };
 
-  // Actually spawn the bullet once the turret is aimed. Applies active reward.
+  // Actually spawn the bullet once the turret is aimed.
+  // Special shots (chance-based, by level) take priority over combo rewards.
   const spawnBullet = (enemy: Enemy) => {
     const { w, h } = sizeRef.current;
     const cx = w * 0.93, cy = h * 0.5;
     const dx = enemy.x - cx;
     const dy = enemy.y - cy;
     const len = Math.hypot(dx, dy) || 1;
-    const base = currentBulletSpeed();
-    const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
-    const launchSpeed = base * jitter;
-    const maxSpeed = launchSpeed * 2;
-    const accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     const ang = Math.atan2(dy, dx);
-    const rewardActive = performance.now() < rewardUntilRef.current;
-    const kind = rewardActive ? rewardTypeRef.current : null;
+    const now = performance.now();
+
+    // Decide bullet mode: special roll wins; otherwise fall back to combo reward.
+    let mode: BulletMode = "normal";
+    const special = rollSpecialShot(levelRef.current);
+    if (special) {
+      mode = special;
+    } else if (now < rewardUntilRef.current && rewardTypeRef.current) {
+      mode = rewardTypeRef.current;
+    }
+
+    let launchSpeed: number;
+    let maxSpeed: number;
+    let accel: number;
+    if (mode === "laser") {
+      // Instant hit: extreme speed so the first frame's segment reaches the target.
+      launchSpeed = 60000; maxSpeed = 60000; accel = 0;
+    } else {
+      const base = currentBulletSpeed();
+      const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
+      launchSpeed = base * jitter;
+      maxSpeed = launchSpeed * 2;
+      accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
+    }
+
     bulletsRef.current.push({
       id: nextId(),
       x: cx, y: cy,
       dx: dx / len, dy: dy / len,
       speed: launchSpeed, launchSpeed, accel, maxSpeed,
       targetId: enemy.id,
-      life: 1.5,
+      life: mode === "laser" ? 0.06 : 1.5,
       bounces: 0,
-      pierce: kind === "pierce",
-      explosive: kind === "explosive",
+      mode,
+      bounceHits: 0,
       hitIds: [],
     });
     recoilRef.current = 8;
     muzzleRef.current = { angle: ang, life: 0.08 };
+    if (mode === "laser") beamsRef.current.push({ x1: cx, y1: cy, x2: enemy.x, y2: enemy.y, life: 0.12, color: "#7df9ff" });
     audio.shot();
   };
+
 
   // Grant a combo reward: 10 kills within 10 seconds.
   const REWARD_LIST: RewardKind[] = ["pierce", "explosive"];
@@ -481,7 +526,7 @@ export default function TypingTowerGame() {
     killsRef.current += 1;
     setKills(killsRef.current);
     maybeGrantReward();
-    if (killsRef.current >= config.killsPerLevel) {
+    if (killsRef.current >= killsForLevel(levelRef.current)) {
       // Advance level
       killsRef.current = 0;
       setKills(0);
@@ -513,12 +558,27 @@ export default function TypingTowerGame() {
         return;
       }
 
-      // If a target is locked (word mid-type), only its next letter counts.
-      let target: Enemy | null = null;
-      if (activeTargetRef.current != null) {
-        target = enemiesRef.current.find(e => e.id === activeTargetRef.current) || null;
-        if (!target) activeTargetRef.current = null;
-      }
+
+      // Soft word lock: if a word is mid-type and its next letter matches, keep
+      // going. If it doesn't match, DON'T penalize — fall through and try to hit
+      // any other enemy that holds this letter (rotate to an existing target).
+      const active = activeTargetRef.current != null
+        ? enemiesRef.current.find(e => e.id === activeTargetRef.current) || null
+        : null;
+      if (!active) activeTargetRef.current = null;
+
+      const registerHit = (en: Enemy) => {
+        en.typed += 1;
+        queueShot(en);
+        if (en.word.length > 1 && en.typed < en.word.length) {
+          activeTargetRef.current = en.id;
+        } else if (activeTargetRef.current === en.id) {
+          activeTargetRef.current = null;
+        }
+        comboRef.current += 1;
+        setHudCombo(comboRef.current);
+        if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
+      };
 
       const registerMiss = () => {
         comboRef.current = 0;
@@ -539,26 +599,15 @@ export default function TypingTowerGame() {
         }
       };
 
-      if (target) {
-        // Locked word: expect the next un-fired letter.
-        const expected = target.word[target.typed];
-        if (expected === k) {
-          target.typed += 1;
-          queueShot(target);
-          // Once the whole word is queued, release the lock so the player
-          // can move on; the enemy is destroyed as the bullets land.
-          if (target.typed >= target.word.length) activeTargetRef.current = null;
-          comboRef.current += 1;
-          setHudCombo(comboRef.current);
-          if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
-        } else {
-          registerMiss();
-        }
+      // 1) Continue the active word if the next letter matches.
+      if (active && active.word[active.typed] === k) {
+        registerHit(active);
         return;
       }
 
-      // Not locked: fire at the CLOSEST enemy whose next-needed letter matches.
-      // No per-target shot limit — the player can keep firing freely.
+      // 2) Otherwise, fire at the CLOSEST enemy whose next-needed letter matches.
+      //    (No target is greyed out or blocked — any enemy holding this letter
+      //     is a valid target.)
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
       let best: Enemy | null = null;
@@ -571,15 +620,9 @@ export default function TypingTowerGame() {
         }
       }
       if (best) {
-        best.typed += 1;
-        queueShot(best);
-        if (best.word.length > 1 && best.typed < best.word.length) {
-          activeTargetRef.current = best.id;
-        }
-        comboRef.current += 1;
-        setHudCombo(comboRef.current);
-        if (missStreakRef.current !== 0) { missStreakRef.current = 0; setMissStreak(0); }
+        registerHit(best);
       } else {
+        // Truly no enemy holds this letter → this is a mistake.
         registerMiss();
       }
     };
@@ -587,10 +630,13 @@ export default function TypingTowerGame() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+
   const restart = () => {
     enemiesRef.current = [];
     bulletsRef.current = [];
     particlesRef.current = [];
+    beamsRef.current = [];
+    lastFireRef.current = 0;
     comboRef.current = 0;
     elapsedRef.current = 0;
     healthRef.current = config.playerHealth;
@@ -653,23 +699,25 @@ export default function TypingTowerGame() {
       const { w, h } = sizeRef.current;
       const cx = w * 0.93, cy = h * 0.5;
 
-      // Move enemies along path + sway
+      // Move enemies along path, offset by their lane + weaver sway (inside road).
       for (const en of enemiesRef.current) {
         en.age += dt;
         en.t += en.speed * dt;
         const p = pathsRef.current[en.pathIdx];
         const pos = pointOnPath(p, en.t);
         en.baseX = pos.x; en.baseY = pos.y;
-        if (en.sway > 0) {
+        const swayS = en.sway > 0 ? Math.sin(en.age * en.swayFreq + en.swayPhase) * en.sway : 0;
+        const offset = en.lane + swayS;
+        if (offset !== 0) {
           const tan = pathTangent(p, en.t);
           const nx = -tan.y, ny = tan.x;
-          const s = Math.sin(en.age * en.swayFreq + en.swayPhase) * en.sway;
-          en.x = pos.x + nx * s;
-          en.y = pos.y + ny * s;
+          en.x = pos.x + nx * offset;
+          en.y = pos.y + ny * offset;
         } else {
           en.x = pos.x; en.y = pos.y;
         }
       }
+
 
       // Enemy reaches turret
       const survivors: Enemy[] = [];
@@ -710,6 +758,27 @@ export default function TypingTowerGame() {
           if (en.word.length > 1 && activeTargetRef.current == null) activeTargetRef.current = en.id;
         }
       };
+      // Kill up to `max` enemies within `radius` of a point (explosive splash).
+      const areaKill = (x: number, y: number, radius: number, max: number) => {
+        const cand = enemiesRef.current
+          .map(e => ({ e, d: Math.hypot(e.x - x, e.y - y) }))
+          .filter(o => o.d <= radius)
+          .sort((a, b) => a.d - b.d)
+          .slice(0, max);
+        for (const { e } of cand) { explode(e.x, e.y, e.kind === "tank"); killEnemy(e); }
+      };
+      // Zap the `max` closest enemies to a point (electric chain).
+      const chainKill = (x: number, y: number, max: number) => {
+        const cand = enemiesRef.current
+          .map(e => ({ e, d: Math.hypot(e.x - x, e.y - y) }))
+          .sort((a, b) => a.d - b.d)
+          .slice(0, max);
+        for (const { e } of cand) {
+          beamsRef.current.push({ x1: x, y1: y, x2: e.x, y2: e.y, life: 0.16, color: "#a8f0ff" });
+          explode(e.x, e.y, false);
+          killEnemy(e);
+        }
+      };
 
       const aliveBullets: Bullet[] = [];
       for (const b of bulletsRef.current) {
@@ -719,17 +788,15 @@ export default function TypingTowerGame() {
         b.life -= dt;
         let consumed = false;
 
-        // obstacles — with ricochet (piercing bullets ignore obstacles)
-        if (!b.pierce) {
+        // obstacles — with ricochet. Pierce & laser ignore them.
+        if (b.mode !== "pierce" && b.mode !== "laser") {
           for (const o of obstaclesRef.current) {
             if (segCircleHit(b.x, b.y, nx, ny, o.x, o.y, o.r + 2)) {
               sparks(o.x, o.y);
               o.hp -= 1;
               if (o.hp <= 0) {
-                // punch through — bullet continues
-                audio.tick();
+                audio.tick(); // punch through — bullet continues
               } else {
-                // reflect off obstacle
                 const rnx = (b.x - o.x);
                 const rny = (b.y - o.y);
                 const rl = Math.hypot(rnx, rny) || 1;
@@ -745,15 +812,15 @@ export default function TypingTowerGame() {
               b.x = nx; b.y = ny;
               if (!consumed) aliveBullets.push(b);
               else refundTarget(b);
-              consumed = true; // handled this frame
+              consumed = true;
               break;
             }
           }
           if (consumed) continue;
         }
 
-        // enemies
-        if (b.pierce) {
+        // enemy collision by mode
+        if (b.mode === "pierce") {
           // Armor-piercing: destroy every enemy along the path, keep flying.
           for (const en of [...enemiesRef.current]) {
             if (b.hitIds.includes(en.id)) continue;
@@ -764,29 +831,52 @@ export default function TypingTowerGame() {
               killEnemy(en);
             }
           }
+        } else if (b.mode === "bounce") {
+          let dead = false, bounced = false;
+          for (const en of enemiesRef.current) {
+            if (b.hitIds.includes(en.id)) continue;
+            if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
+              b.hitIds.push(en.id);
+              explode(en.x, en.y, en.kind === "tank");
+              audio.boom();
+              killEnemy(en);
+              b.bounceHits += 1;
+              if (b.bounceHits >= 10) { dead = true; }
+              else {
+                const a = Math.random() * Math.PI * 2;
+                b.dx = Math.cos(a); b.dy = Math.sin(a);
+                b.x = en.x; b.y = en.y; b.life = 1.2;
+                bounced = true;
+              }
+              break;
+            }
+          }
+          if (dead) continue;          // used all bounces
+          if (bounced) { aliveBullets.push(b); continue; }
+          // no hit this frame → normal movement below
         } else {
+          // normal / explosive / laser / electric — single-target hit
           let hitEnemy = false;
           for (const en of enemiesRef.current) {
             if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
               b.hitIds.push(en.id);
               sparks(en.x, en.y);
-              if (b.explosive) {
-                // Detonate: destroy target + nearby enemies.
-                explode(en.x, en.y, true);
+              const ex = en.x, ey = en.y;
+              if (b.mode === "explosive") {
+                explode(ex, ey, true);
                 audio.boom();
-                const ex = en.x, ey = en.y;
                 killEnemy(en);
-                const R = 95;
-                for (const other of [...enemiesRef.current]) {
-                  if (Math.hypot(other.x - ex, other.y - ey) <= R) {
-                    explode(other.x, other.y, other.kind === "tank");
-                    killEnemy(other);
-                  }
-                }
+                areaKill(ex, ey, 100, 3); // up to 3 nearby
+              } else if (b.mode === "electric") {
+                explode(ex, ey, false);
+                audio.boom();
+                killEnemy(en);
+                chainKill(ex, ey, 3);     // 3 closest to target
               } else {
+                // normal or laser: one hit
                 en.hp -= 1;
                 if (en.hp <= 0) {
-                  explode(en.x, en.y, en.kind === "tank");
+                  explode(ex, ey, en.kind === "tank");
                   audio.boom();
                   killEnemy(en);
                 }
@@ -807,6 +897,12 @@ export default function TypingTowerGame() {
       }
       bulletsRef.current = aliveBullets;
       obstaclesRef.current = obstaclesRef.current.filter(o => o.hp > 0);
+
+      // beams (laser / electric visuals)
+      for (const bm of beamsRef.current) bm.life -= dt;
+      beamsRef.current = beamsRef.current.filter(bm => bm.life > 0);
+
+
 
 
       // particles
@@ -832,17 +928,24 @@ export default function TypingTowerGame() {
         break;
       }
 
+      // Rotate the turret at a fixed angular speed (default 60°/s).
       let diff = targetAngleRef.current - turretAngleRef.current;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      turretAngleRef.current += diff * Math.min(1, dt * 18);
+      const rotSpeed = (config.turretRotSpeedDeg * Math.PI) / 180;
+      const maxStep = rotSpeed * dt;
+      if (Math.abs(diff) <= maxStep) turretAngleRef.current = targetAngleRef.current;
+      else turretAngleRef.current += Math.sign(diff) * maxStep;
 
-      // Fire the queued shot once the barrel points at the target.
-      if (pending.length && Math.abs(diff) < 0.1) {
+      // Fire the queued shot once aimed AND the fire-rate cooldown has elapsed.
+      // Base 3 shots/sec; a strong combo speeds it up.
+      const fireInterval = 1000 / (config.fireRatePerSec + (comboRef.current >= 15 ? 2 : 0));
+      if (pending.length && Math.abs(diff) < 0.08 && now - lastFireRef.current >= fireInterval) {
         const en = enemiesRef.current.find(e => e.id === pending[0].enemyId);
-        if (en) spawnBullet(en);
+        if (en) { spawnBullet(en); lastFireRef.current = now; }
         pending.shift();
       }
+
 
       draw();
       raf = requestAnimationFrame(loop);
@@ -901,29 +1004,51 @@ export default function TypingTowerGame() {
         ctx.beginPath(); ctx.arc(o.x - o.r * 0.3, o.y - o.r * 0.3, o.r * 0.4, 0, Math.PI * 2); ctx.fill();
       }
 
-      // Bullets
+      // Beams (laser / electric)
+      for (const bm of beamsRef.current) {
+        const a = Math.max(0, Math.min(1, bm.life / 0.16));
+        ctx.globalAlpha = a;
+        ctx.strokeStyle = bm.color;
+        ctx.lineWidth = 6;
+        ctx.lineCap = "round";
+        ctx.beginPath(); ctx.moveTo(bm.x1, bm.y1); ctx.lineTo(bm.x2, bm.y2); ctx.stroke();
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(bm.x1, bm.y1); ctx.lineTo(bm.x2, bm.y2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.lineCap = "butt";
+
+      // Bullets — color-coded by mode.
+      const bulletColors: Record<BulletMode, { trail: string; core: string; dot: string }> = {
+        normal: { trail: "rgba(255,180,80,0.35)", core: "rgba(255,255,220,1)", dot: "#fffbe6" },
+        pierce: { trail: "rgba(120,220,255,0.4)", core: "rgba(200,245,255,1)", dot: "#dff6ff" },
+        explosive: { trail: "rgba(255,120,60,0.4)", core: "rgba(255,210,150,1)", dot: "#ffd9b0" },
+        bounce: { trail: "rgba(180,120,255,0.4)", core: "rgba(225,200,255,1)", dot: "#e8ddff" },
+        laser: { trail: "rgba(125,249,255,0.5)", core: "rgba(230,255,255,1)", dot: "#e6ffff" },
+        electric: { trail: "rgba(120,200,255,0.5)", core: "rgba(210,240,255,1)", dot: "#d2f0ff" },
+      };
       for (const b of bulletsRef.current) {
         const len = Math.min(34, 10 + b.speed / 70);
         const ux = b.dx, uy = b.dy;
         const tx = b.x - ux * len, ty = b.y - uy * len;
-        // Color-code special reward bullets.
-        const trail = b.pierce ? "rgba(120,220,255,0.4)" : b.explosive ? "rgba(255,120,60,0.4)" : "rgba(255,180,80,0.35)";
-        const core = b.pierce ? "rgba(200,245,255,1)" : b.explosive ? "rgba(255,210,150,1)" : "rgba(255,255,220,1)";
-        const dot = b.pierce ? "#dff6ff" : b.explosive ? "#ffd9b0" : "#fffbe6";
-        ctx.strokeStyle = trail;
-        ctx.lineWidth = b.pierce || b.explosive ? 9 : 7;
+        const special = b.mode !== "normal";
+        const cc = bulletColors[b.mode];
+        ctx.strokeStyle = cc.trail;
+        ctx.lineWidth = special ? 9 : 7;
         ctx.lineCap = "round";
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
         const grad = ctx.createLinearGradient(tx, ty, b.x, b.y);
         grad.addColorStop(0, "rgba(255,220,120,0)");
-        grad.addColorStop(1, core);
+        grad.addColorStop(1, cc.core);
         ctx.strokeStyle = grad;
         ctx.lineWidth = 3;
         ctx.beginPath(); ctx.moveTo(tx, ty); ctx.lineTo(b.x, b.y); ctx.stroke();
-        ctx.fillStyle = dot;
-        ctx.beginPath(); ctx.arc(b.x, b.y, b.pierce || b.explosive ? 4 : 3, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = cc.dot;
+        ctx.beginPath(); ctx.arc(b.x, b.y, special ? 4 : 3, 0, Math.PI * 2); ctx.fill();
         ctx.lineCap = "butt";
       }
+
 
 
       // Enemies
@@ -1025,9 +1150,16 @@ export default function TypingTowerGame() {
   const banSec = banRemaining > 0 ? (banRemaining / 1000).toFixed(1) : "0.0";
   const banned = banRemaining > 0;
   const missDots = [0, 1, 2, 3];
-  const killPct = Math.min(100, (kills / config.killsPerLevel) * 100);
+  const killGoal = killsForLevel(level);
+  const killPct = Math.min(100, (kills / killGoal) * 100);
   const currentLetters = lettersForLevel(level);
   const wordLen = targetWordLength(level);
+  const unlockedSpecials = [
+    level >= 4 ? "💥" : null,
+    level >= 5 ? "🎯" : null,
+    level >= 6 ? "⚡" : null,
+    level >= 7 ? "🔷" : null,
+  ].filter(Boolean) as string[];
 
   return (
     <div className="relative w-full h-screen bg-black overflow-hidden">
@@ -1042,7 +1174,7 @@ export default function TypingTowerGame() {
             </div>
             <div className="mt-2 flex justify-between text-white/60 text-xs">
               <span>KILLS</span>
-              <span>{kills}/{config.killsPerLevel}</span>
+              <span>{kills}/{killGoal}</span>
             </div>
             <div className="h-1.5 bg-white/10 rounded overflow-hidden mt-1">
               <div className="h-full bg-gradient-to-r from-amber-500 to-yellow-200" style={{ width: `${killPct}%` }} />
@@ -1050,6 +1182,11 @@ export default function TypingTowerGame() {
             <div className="mt-2 text-white/50 text-[10px] tracking-wider">
               {wordLen === 1 ? `KEYS: ${currentLetters}` : `WORDS · LEN ${wordLen}`}
             </div>
+            {unlockedSpecials.length > 0 && (
+              <div className="mt-1 text-cyan-300/70 text-[10px] tracking-wider">
+                SPECIALS: {unlockedSpecials.join(" ")}
+              </div>
+            )}
           </div>
           <div className="bg-black/60 border border-white/10 rounded px-3 py-2 font-mono text-sm text-right">
             <div className="text-white/60">COMBO</div>
