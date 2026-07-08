@@ -928,17 +928,24 @@ export default function TypingTowerGame() {
         break;
       }
 
+      // Rotate the turret at a fixed angular speed (default 60°/s).
       let diff = targetAngleRef.current - turretAngleRef.current;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      turretAngleRef.current += diff * Math.min(1, dt * 18);
+      const rotSpeed = (config.turretRotSpeedDeg * Math.PI) / 180;
+      const maxStep = rotSpeed * dt;
+      if (Math.abs(diff) <= maxStep) turretAngleRef.current = targetAngleRef.current;
+      else turretAngleRef.current += Math.sign(diff) * maxStep;
 
-      // Fire the queued shot once the barrel points at the target.
-      if (pending.length && Math.abs(diff) < 0.1) {
+      // Fire the queued shot once aimed AND the fire-rate cooldown has elapsed.
+      // Base 3 shots/sec; a strong combo speeds it up.
+      const fireInterval = 1000 / (config.fireRatePerSec + (comboRef.current >= 15 ? 2 : 0));
+      if (pending.length && Math.abs(diff) < 0.08 && now - lastFireRef.current >= fireInterval) {
         const en = enemiesRef.current.find(e => e.id === pending[0].enemyId);
-        if (en) spawnBullet(en);
+        if (en) { spawnBullet(en); lastFireRef.current = now; }
         pending.shift();
       }
+
 
       draw();
       raf = requestAnimationFrame(loop);
