@@ -1168,7 +1168,7 @@ export default function TypingTowerGame() {
             </div>
             <div className="mt-2 flex justify-between text-white/60 text-xs">
               <span>KILLS</span>
-              <span>{kills}/{config.killsPerLevel}</span>
+              <span>{kills}/{killGoal}</span>
             </div>
             <div className="h-1.5 bg-white/10 rounded overflow-hidden mt-1">
               <div className="h-full bg-gradient-to-r from-amber-500 to-yellow-200" style={{ width: `${killPct}%` }} />
