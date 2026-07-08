@@ -758,6 +758,27 @@ export default function TypingTowerGame() {
           if (en.word.length > 1 && activeTargetRef.current == null) activeTargetRef.current = en.id;
         }
       };
+      // Kill up to `max` enemies within `radius` of a point (explosive splash).
+      const areaKill = (x: number, y: number, radius: number, max: number) => {
+        const cand = enemiesRef.current
+          .map(e => ({ e, d: Math.hypot(e.x - x, e.y - y) }))
+          .filter(o => o.d <= radius)
+          .sort((a, b) => a.d - b.d)
+          .slice(0, max);
+        for (const { e } of cand) { explode(e.x, e.y, e.kind === "tank"); killEnemy(e); }
+      };
+      // Zap the `max` closest enemies to a point (electric chain).
+      const chainKill = (x: number, y: number, max: number) => {
+        const cand = enemiesRef.current
+          .map(e => ({ e, d: Math.hypot(e.x - x, e.y - y) }))
+          .sort((a, b) => a.d - b.d)
+          .slice(0, max);
+        for (const { e } of cand) {
+          beamsRef.current.push({ x1: x, y1: y, x2: e.x, y2: e.y, life: 0.16, color: "#a8f0ff" });
+          explode(e.x, e.y, false);
+          killEnemy(e);
+        }
+      };
 
       const aliveBullets: Bullet[] = [];
       for (const b of bulletsRef.current) {
@@ -767,17 +788,15 @@ export default function TypingTowerGame() {
         b.life -= dt;
         let consumed = false;
 
-        // obstacles — with ricochet (piercing bullets ignore obstacles)
-        if (!b.pierce) {
+        // obstacles — with ricochet. Pierce & laser ignore them.
+        if (b.mode !== "pierce" && b.mode !== "laser") {
           for (const o of obstaclesRef.current) {
             if (segCircleHit(b.x, b.y, nx, ny, o.x, o.y, o.r + 2)) {
               sparks(o.x, o.y);
               o.hp -= 1;
               if (o.hp <= 0) {
-                // punch through — bullet continues
-                audio.tick();
+                audio.tick(); // punch through — bullet continues
               } else {
-                // reflect off obstacle
                 const rnx = (b.x - o.x);
                 const rny = (b.y - o.y);
                 const rl = Math.hypot(rnx, rny) || 1;
@@ -793,15 +812,15 @@ export default function TypingTowerGame() {
               b.x = nx; b.y = ny;
               if (!consumed) aliveBullets.push(b);
               else refundTarget(b);
-              consumed = true; // handled this frame
+              consumed = true;
               break;
             }
           }
           if (consumed) continue;
         }
 
-        // enemies
-        if (b.pierce) {
+        // enemy collision by mode
+        if (b.mode === "pierce") {
           // Armor-piercing: destroy every enemy along the path, keep flying.
           for (const en of [...enemiesRef.current]) {
             if (b.hitIds.includes(en.id)) continue;
@@ -812,29 +831,52 @@ export default function TypingTowerGame() {
               killEnemy(en);
             }
           }
+        } else if (b.mode === "bounce") {
+          let dead = false, bounced = false;
+          for (const en of enemiesRef.current) {
+            if (b.hitIds.includes(en.id)) continue;
+            if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
+              b.hitIds.push(en.id);
+              explode(en.x, en.y, en.kind === "tank");
+              audio.boom();
+              killEnemy(en);
+              b.bounceHits += 1;
+              if (b.bounceHits >= 10) { dead = true; }
+              else {
+                const a = Math.random() * Math.PI * 2;
+                b.dx = Math.cos(a); b.dy = Math.sin(a);
+                b.x = en.x; b.y = en.y; b.life = 1.2;
+                bounced = true;
+              }
+              break;
+            }
+          }
+          if (dead) continue;          // used all bounces
+          if (bounced) { aliveBullets.push(b); continue; }
+          // no hit this frame → normal movement below
         } else {
+          // normal / explosive / laser / electric — single-target hit
           let hitEnemy = false;
           for (const en of enemiesRef.current) {
             if (segCircleHit(b.x, b.y, nx, ny, en.x, en.y, en.radius)) {
               b.hitIds.push(en.id);
               sparks(en.x, en.y);
-              if (b.explosive) {
-                // Detonate: destroy target + nearby enemies.
-                explode(en.x, en.y, true);
+              const ex = en.x, ey = en.y;
+              if (b.mode === "explosive") {
+                explode(ex, ey, true);
                 audio.boom();
-                const ex = en.x, ey = en.y;
                 killEnemy(en);
-                const R = 95;
-                for (const other of [...enemiesRef.current]) {
-                  if (Math.hypot(other.x - ex, other.y - ey) <= R) {
-                    explode(other.x, other.y, other.kind === "tank");
-                    killEnemy(other);
-                  }
-                }
+                areaKill(ex, ey, 100, 3); // up to 3 nearby
+              } else if (b.mode === "electric") {
+                explode(ex, ey, false);
+                audio.boom();
+                killEnemy(en);
+                chainKill(ex, ey, 3);     // 3 closest to target
               } else {
+                // normal or laser: one hit
                 en.hp -= 1;
                 if (en.hp <= 0) {
-                  explode(en.x, en.y, en.kind === "tank");
+                  explode(ex, ey, en.kind === "tank");
                   audio.boom();
                   killEnemy(en);
                 }
@@ -855,6 +897,12 @@ export default function TypingTowerGame() {
       }
       bulletsRef.current = aliveBullets;
       obstaclesRef.current = obstaclesRef.current.filter(o => o.hp > 0);
+
+      // beams (laser / electric visuals)
+      for (const bm of beamsRef.current) bm.life -= dt;
+      beamsRef.current = beamsRef.current.filter(bm => bm.life > 0);
+
+
 
 
       // particles
