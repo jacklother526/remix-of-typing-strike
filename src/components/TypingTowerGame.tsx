@@ -1176,6 +1176,11 @@ export default function TypingTowerGame() {
             <div className="mt-2 text-white/50 text-[10px] tracking-wider">
               {wordLen === 1 ? `KEYS: ${currentLetters}` : `WORDS · LEN ${wordLen}`}
             </div>
+            {unlockedSpecials.length > 0 && (
+              <div className="mt-1 text-cyan-300/70 text-[10px] tracking-wider">
+                SPECIALS: {unlockedSpecials.join(" ")}
+              </div>
+            )}
           </div>
           <div className="bg-black/60 border border-white/10 rounded px-3 py-2 font-mono text-sm text-right">
             <div className="text-white/60">COMBO</div>
