@@ -1150,7 +1150,8 @@ export default function TypingTowerGame() {
   const banSec = banRemaining > 0 ? (banRemaining / 1000).toFixed(1) : "0.0";
   const banned = banRemaining > 0;
   const missDots = [0, 1, 2, 3];
-  const killPct = Math.min(100, (kills / config.killsPerLevel) * 100);
+  const killGoal = killsForLevel(level);
+  const killPct = Math.min(100, (kills / killGoal) * 100);
   const currentLetters = lettersForLevel(level);
   const wordLen = targetWordLength(level);
 
