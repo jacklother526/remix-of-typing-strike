@@ -81,7 +81,7 @@ export function pickEnemyKind(level: number): EnemyKind {
 }
 
 const WORDS_BY_LEN: Record<number, string[]> = {
-  2: ["GO","HI","UP","ON","IN","OK","MY","IT","NO","WE"],
+  2: ["GO","HI","UP","ON","IN","Ok","My","IT","NO","WE"],
   3: ["RUN","HIT","FOX","GUN","TNT","MUD","WAR","RED","SKY","RAM","FOG","ICE","JAM","AXE"],
   4: ["TANK","BOMB","FIRE","ARMY","BOLT","RUST","IRON","BASE","SHOT","KILL","DUST","SCAR","AMMO","FUEL"],
   5: ["STORM","SCRAP","METAL","BLAST","DRONE","LASER","RIVER","ALPHA","TIGER","SHELL","RUINS","SMOKE","FLARE"],
