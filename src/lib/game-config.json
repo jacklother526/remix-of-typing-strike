@@ -12,5 +12,6 @@
   "pathWidth": 70,
   "killsPerLevel": 100,
   "fireRatePerSec": 6,
-  "turretRotSpeedDeg": 120
+  "turretRotSpeedDeg": 120,
+  "learnEnemySpeedBase": 34
 }
