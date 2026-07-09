@@ -3,14 +3,14 @@
   "enemySpeedMin": 26,
   "enemySpeedMax": 90,
   "bulletSpeedBase": 1100,
-  "bulletSpeedGrowthPerSec": 14,
+  "bulletSpeedGrowthPerSec": 500,
   "bulletSpeedMax": 2800,
   "bulletJitter": 0.15,
   "playerHealth": 1000,
-  "enemyDamage": 10,
-  "obstacleCount": 10,
-  "pathWidth": 60,
+  "enemyDamage": 1,
+  "obstacleCount": 20,
+  "pathWidth": 65,
   "killsPerLevel": 100,
-  "fireRatePerSec": 3,
-  "turretRotSpeedDeg": 60
+  "fireRatePerSec": 5,
+  "turretRotSpeedDeg": 120
 }
