@@ -9,8 +9,8 @@
   "playerHealth": 1000,
   "enemyDamage": 1,
   "obstacleCount": 20,
-  "pathWidth": 65,
+  "pathWidth": 70,
   "killsPerLevel": 100,
-  "fireRatePerSec": 5,
+  "fireRatePerSec": 6,
   "turretRotSpeedDeg": 120
 }
