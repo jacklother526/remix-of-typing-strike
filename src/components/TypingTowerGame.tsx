@@ -100,6 +100,14 @@ function isFastLetterWord(word: string): boolean {
   return word.length > 0 && FAST_LETTERS.includes(word[0]) && [...word].every((c) => c === word[0]);
 }
 
+// Fixed, always-on colors for specific letters (vivid on the dark label bg).
+const LETTER_COLORS: Record<string, string> = {
+  B: "#4aa8ff",
+  R: "#ff4d4d",
+  Y: "#ffe066",
+  G: "#3ddc6b",
+};
+
 function useAudio() {
   const ctxRef = useRef<AudioContext | null>(null);
   const ensure = () => {
