@@ -1077,12 +1077,12 @@ export default function TypingTowerGame() {
       let diff = targetAngleRef.current - turretAngleRef.current;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      const rotSpeed = (config.turretRotSpeedDeg * Math.PI) / 180;
+      const rotSpeed = (settingsRef.current.turretRotSpeedDeg * Math.PI) / 180;
       const maxStep = rotSpeed * dt;
       if (Math.abs(diff) <= maxStep) turretAngleRef.current = targetAngleRef.current;
       else turretAngleRef.current += Math.sign(diff) * maxStep;
 
-      const fireInterval = 1000 / (config.fireRatePerSec + (comboRef.current >= 15 ? 2 : 0));
+      const fireInterval = 1000 / (settingsRef.current.fireRatePerSec + (comboRef.current >= 15 ? 2 : 0));
       if (pending.length && Math.abs(diff) < 0.08 && now - lastFireRef.current >= fireInterval) {
         const en = enemiesRef.current.find(e => e.id === pending[0].enemyId);
         if (en) { spawnBullet(en); lastFireRef.current = now; }
