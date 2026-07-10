@@ -316,6 +316,18 @@ export default function TypingTowerGame() {
   const [levelResult, setLevelResult] = useState<{ level: number; stars: number } | null>(null);
   const [praise, setPraise] = useState<string | null>(null);
 
+  // --- player-configurable settings (menu) ---
+  const settingsRef = useRef({
+    bulletSpeed: config.bulletSpeedBase,
+    turretRotSpeedDeg: config.turretRotSpeedDeg,
+    fireRatePerSec: config.fireRatePerSec,
+  });
+  const [bulletSpeed, setBulletSpeed] = useState(config.bulletSpeedBase);
+  const [turretRotSpeed, setTurretRotSpeed] = useState(config.turretRotSpeedDeg);
+  const [fireRate, setFireRate] = useState(config.fireRatePerSec);
+
+
+
   const buildLevel = () => {
     const { w, h } = sizeRef.current;
     const cx = w * 0.93, cy = h * 0.5;
