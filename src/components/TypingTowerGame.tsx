@@ -539,11 +539,11 @@ export default function TypingTowerGame() {
   const maybeGrantReward = () => {
     const now = performance.now();
     killTimesRef.current.push(now);
-    killTimesRef.current = killTimesRef.current.filter((t) => now - t <= 10000);
-    if (killTimesRef.current.length >= 10) {
+    killTimesRef.current = killTimesRef.current.filter((t) => now - t <= 20000);
+    if (killTimesRef.current.length >= 18) {
       killTimesRef.current = [];
       const kind = REWARD_LIST[Math.floor(Math.random() * REWARD_LIST.length)];
-      const durationMs = comboRef.current >= 20 ? 10000 : 5000;
+      const durationMs = 5000;
       rewardTypeRef.current = kind;
       rewardUntilRef.current = now + durationMs;
       setRewardType(kind);
