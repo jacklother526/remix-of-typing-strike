@@ -455,7 +455,10 @@ export default function TypingTowerGame() {
     if (we.kind === "runner") radius = 15;
     else if (we.kind === "weaver") { sway = 20; swayFreq = 3.2; }
     else if (we.kind === "tank") radius = 26;
-    const speed = config.learnEnemySpeedBase * we.speedMul;
+    // F, H and G are always fast: 3x the base learn enemy speed.
+    const speed = isFastLetterWord(we.letter)
+      ? config.learnEnemySpeedBase * 3
+      : config.learnEnemySpeedBase * we.speedMul;
     const half = config.pathWidth / 2 - radius - 2;
     const lane = half > 0 ? (Math.random() * 2 - 1) * half : 0;
     enemiesRef.current.push({
