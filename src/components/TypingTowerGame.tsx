@@ -766,6 +766,8 @@ export default function TypingTowerGame() {
         statsRef.current.misses += 1;
         missStreakRef.current += 1;
         setMissStreak(missStreakRef.current);
+        // Wrong key empties the magazine: all queued Ammo shots are lost.
+        pendingShotsRef.current = [];
         audio.jam();
         if (modeRef.current === "learn") {
           // Gentle while learning: short ban, never instant destruction.
