@@ -1392,8 +1392,44 @@ export default function TypingTowerGame() {
             <div className="text-5xl font-black text-amber-300 mb-2 tracking-widest drop-shadow-[0_0_20px_rgba(255,180,50,0.5)]">
               TYPING TOWER
             </div>
-            <div className="text-white/60 mb-8 text-sm">Learn the letters. Defend the base.</div>
+            <div className="text-white/60 mb-6 text-sm">Learn the letters. Defend the base.</div>
+
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-6 text-left space-y-4">
+              <div className="text-white/50 text-[11px] tracking-widest">SETTINGS</div>
+              <label className="block">
+                <div className="flex justify-between text-xs text-white/70 mb-1">
+                  <span>Bullet speed</span><span className="text-amber-300">{bulletSpeed}</span>
+                </div>
+                <input
+                  type="range" min={300} max={3000} step={50} value={bulletSpeed}
+                  onChange={(e) => { const v = Number(e.target.value); setBulletSpeed(v); settingsRef.current.bulletSpeed = v; }}
+                  className="w-full accent-amber-400"
+                />
+              </label>
+              <label className="block">
+                <div className="flex justify-between text-xs text-white/70 mb-1">
+                  <span>Turret rotation</span><span className="text-amber-300">{turretRotSpeed}°/s</span>
+                </div>
+                <input
+                  type="range" min={30} max={360} step={10} value={turretRotSpeed}
+                  onChange={(e) => { const v = Number(e.target.value); setTurretRotSpeed(v); settingsRef.current.turretRotSpeedDeg = v; }}
+                  className="w-full accent-amber-400"
+                />
+              </label>
+              <label className="block">
+                <div className="flex justify-between text-xs text-white/70 mb-1">
+                  <span>Firing speed</span><span className="text-amber-300">{fireRate}/s</span>
+                </div>
+                <input
+                  type="range" min={1} max={12} step={1} value={fireRate}
+                  onChange={(e) => { const v = Number(e.target.value); setFireRate(v); settingsRef.current.fireRatePerSec = v; }}
+                  className="w-full accent-amber-400"
+                />
+              </label>
+            </div>
+
             <div className="flex flex-col gap-4">
+
               <button
                 onClick={() => startGame("learn")}
                 className="group rounded-lg border-2 border-amber-400/70 bg-amber-500/10 hover:bg-amber-500/25 transition px-6 py-5 text-left"
