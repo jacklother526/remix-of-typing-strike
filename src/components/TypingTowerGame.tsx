@@ -488,10 +488,6 @@ export default function TypingTowerGame() {
     }
   };
 
-  const currentBulletSpeed = () => {
-    const v = config.bulletSpeedBase + elapsedRef.current * config.bulletSpeedGrowthPerSec;
-    return Math.min(v, config.bulletSpeedMax);
-  };
 
   const queueShot = (enemy: Enemy) => {
     pendingShotsRef.current.push({ enemyId: enemy.id });
