@@ -520,9 +520,9 @@ export default function TypingTowerGame() {
     if (mode === "laser") {
       launchSpeed = 60000; maxSpeed = 60000; accel = 0;
     } else {
-      const base = currentBulletSpeed();
-      const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
-      launchSpeed = base * jitter;
+      // Every normal bullet rolls a fresh speed in [1.0, 1.7] x initial speed.
+      const base = settingsRef.current.bulletSpeed;
+      launchSpeed = base * (1 + Math.random() * 0.7);
       maxSpeed = launchSpeed * 2;
       accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     }
