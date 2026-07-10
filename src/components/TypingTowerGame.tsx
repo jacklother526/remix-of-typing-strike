@@ -93,6 +93,21 @@ type Path = {
 let _id = 1;
 const nextId = () => _id++;
 
+// F, H and G targets are always fast. A target counts as a fast-letter word when
+// every character is the same one of these letters (single letter or a repeat).
+const FAST_LETTERS = ["F", "H", "G"];
+function isFastLetterWord(word: string): boolean {
+  return word.length > 0 && FAST_LETTERS.includes(word[0]) && [...word].every((c) => c === word[0]);
+}
+
+// Fixed, always-on colors for specific letters (vivid on the dark label bg).
+const LETTER_COLORS: Record<string, string> = {
+  B: "#4aa8ff",
+  R: "#ff4d4d",
+  Y: "#ffe066",
+  G: "#3ddc6b",
+};
+
 function useAudio() {
   const ctxRef = useRef<AudioContext | null>(null);
   const ensure = () => {
@@ -316,6 +331,18 @@ export default function TypingTowerGame() {
   const [levelResult, setLevelResult] = useState<{ level: number; stars: number } | null>(null);
   const [praise, setPraise] = useState<string | null>(null);
 
+  // --- player-configurable settings (menu) ---
+  const settingsRef = useRef({
+    bulletSpeed: config.bulletSpeedBase,
+    turretRotSpeedDeg: config.turretRotSpeedDeg,
+    fireRatePerSec: config.fireRatePerSec,
+  });
+  const [bulletSpeed, setBulletSpeed] = useState(config.bulletSpeedBase);
+  const [turretRotSpeed, setTurretRotSpeed] = useState(config.turretRotSpeedDeg);
+  const [fireRate, setFireRate] = useState(config.fireRatePerSec);
+
+
+
   const buildLevel = () => {
     const { w, h } = sizeRef.current;
     const cx = w * 0.93, cy = h * 0.5;
@@ -412,6 +439,9 @@ export default function TypingTowerGame() {
 
     if (kind !== "tank" && Math.random() < 0.14) speed *= 1.9 + Math.random() * 1.3;
 
+    // F, H and G are always fast: 3x the base enemy speed.
+    if (isFastLetterWord(word)) speed = config.enemySpeedMin * mul * 3;
+
     const half = config.pathWidth / 2 - radius - 2;
     const lane = half > 0 ? (Math.random() * 2 - 1) * half : 0;
 
@@ -433,7 +463,10 @@ export default function TypingTowerGame() {
     if (we.kind === "runner") radius = 15;
     else if (we.kind === "weaver") { sway = 20; swayFreq = 3.2; }
     else if (we.kind === "tank") radius = 26;
-    const speed = config.learnEnemySpeedBase * we.speedMul;
+    // F, H and G are always fast: 3x the base learn enemy speed.
+    const speed = isFastLetterWord(we.letter)
+      ? config.learnEnemySpeedBase * 3
+      : config.learnEnemySpeedBase * we.speedMul;
     const half = config.pathWidth / 2 - radius - 2;
     const lane = half > 0 ? (Math.random() * 2 - 1) * half : 0;
     enemiesRef.current.push({
@@ -476,10 +509,6 @@ export default function TypingTowerGame() {
     }
   };
 
-  const currentBulletSpeed = () => {
-    const v = config.bulletSpeedBase + elapsedRef.current * config.bulletSpeedGrowthPerSec;
-    return Math.min(v, config.bulletSpeedMax);
-  };
 
   const queueShot = (enemy: Enemy) => {
     pendingShotsRef.current.push({ enemyId: enemy.id });
@@ -508,9 +537,9 @@ export default function TypingTowerGame() {
     if (mode === "laser") {
       launchSpeed = 60000; maxSpeed = 60000; accel = 0;
     } else {
-      const base = currentBulletSpeed();
-      const jitter = 1 + (Math.random() * 2 - 1) * config.bulletJitter;
-      launchSpeed = base * jitter;
+      // Every normal bullet rolls a fresh speed in [1.0, 1.7] x initial speed.
+      const base = settingsRef.current.bulletSpeed;
+      launchSpeed = base * (1 + Math.random() * 0.7);
       maxSpeed = launchSpeed * 2;
       accel = (maxSpeed * maxSpeed - launchSpeed * launchSpeed) / (2 * Math.max(60, len));
     }
@@ -531,11 +560,11 @@ export default function TypingTowerGame() {
   const maybeGrantReward = () => {
     const now = performance.now();
     killTimesRef.current.push(now);
-    killTimesRef.current = killTimesRef.current.filter((t) => now - t <= 10000);
-    if (killTimesRef.current.length >= 10) {
+    killTimesRef.current = killTimesRef.current.filter((t) => now - t <= 20000);
+    if (killTimesRef.current.length >= 18) {
       killTimesRef.current = [];
       const kind = REWARD_LIST[Math.floor(Math.random() * REWARD_LIST.length)];
-      const durationMs = comboRef.current >= 20 ? 10000 : 5000;
+      const durationMs = 5000;
       rewardTypeRef.current = kind;
       rewardUntilRef.current = now + durationMs;
       setRewardType(kind);
@@ -699,6 +728,8 @@ export default function TypingTowerGame() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ignore auto-repeat from holding a key: the player must press to fire.
+      if (e.repeat) return;
       if (gameOverRef.current) {
         if (e.key === "Enter") startGame(modeRef.current === "survival" ? "survival" : "learn");
         return;
@@ -743,6 +774,8 @@ export default function TypingTowerGame() {
         statsRef.current.misses += 1;
         missStreakRef.current += 1;
         setMissStreak(missStreakRef.current);
+        // Wrong key empties the magazine: all queued Ammo shots are lost.
+        pendingShotsRef.current = [];
         audio.jam();
         if (modeRef.current === "learn") {
           // Gentle while learning: short ban, never instant destruction.
@@ -1052,12 +1085,12 @@ export default function TypingTowerGame() {
       let diff = targetAngleRef.current - turretAngleRef.current;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      const rotSpeed = (config.turretRotSpeedDeg * Math.PI) / 180;
+      const rotSpeed = (settingsRef.current.turretRotSpeedDeg * Math.PI) / 180;
       const maxStep = rotSpeed * dt;
       if (Math.abs(diff) <= maxStep) turretAngleRef.current = targetAngleRef.current;
       else turretAngleRef.current += Math.sign(diff) * maxStep;
 
-      const fireInterval = 1000 / (config.fireRatePerSec + (comboRef.current >= 15 ? 2 : 0));
+      const fireInterval = 1000 / (settingsRef.current.fireRatePerSec + (comboRef.current >= 15 ? 2 : 0));
       if (pending.length && Math.abs(diff) < 0.08 && now - lastFireRef.current >= fireInterval) {
         const en = enemiesRef.current.find(e => e.id === pending[0].enemyId);
         if (en) { spawnBullet(en); lastFireRef.current = now; }
@@ -1212,7 +1245,10 @@ export default function TypingTowerGame() {
         const midY = by + bh / 2 + 1;
         for (let i = 0; i < label.length; i++) {
           const ch = label[i];
-          ctx.fillStyle = i < en.typed ? "rgba(255,255,255,0.28)" : (isActive ? "#ffd966" : "#ffe066");
+          const fixed = LETTER_COLORS[ch];
+          if (i < en.typed) ctx.fillStyle = "rgba(255,255,255,0.28)";
+          else if (fixed) ctx.fillStyle = fixed;
+          else ctx.fillStyle = isActive ? "#ffd966" : "#ffe066";
           ctx.fillText(ch, cursorX, midY);
           cursorX += ctx.measureText(ch).width;
         }
@@ -1356,8 +1392,44 @@ export default function TypingTowerGame() {
             <div className="text-5xl font-black text-amber-300 mb-2 tracking-widest drop-shadow-[0_0_20px_rgba(255,180,50,0.5)]">
               TYPING TOWER
             </div>
-            <div className="text-white/60 mb-8 text-sm">Learn the letters. Defend the base.</div>
+            <div className="text-white/60 mb-6 text-sm">Learn the letters. Defend the base.</div>
+
+            <div className="rounded-lg border border-white/10 bg-white/5 p-4 mb-6 text-left space-y-4">
+              <div className="text-white/50 text-[11px] tracking-widest">SETTINGS</div>
+              <label className="block">
+                <div className="flex justify-between text-xs text-white/70 mb-1">
+                  <span>Bullet speed</span><span className="text-amber-300">{bulletSpeed}</span>
+                </div>
+                <input
+                  type="range" min={300} max={3000} step={50} value={bulletSpeed}
+                  onChange={(e) => { const v = Number(e.target.value); setBulletSpeed(v); settingsRef.current.bulletSpeed = v; }}
+                  className="w-full accent-amber-400"
+                />
+              </label>
+              <label className="block">
+                <div className="flex justify-between text-xs text-white/70 mb-1">
+                  <span>Turret rotation</span><span className="text-amber-300">{turretRotSpeed}°/s</span>
+                </div>
+                <input
+                  type="range" min={30} max={360} step={10} value={turretRotSpeed}
+                  onChange={(e) => { const v = Number(e.target.value); setTurretRotSpeed(v); settingsRef.current.turretRotSpeedDeg = v; }}
+                  className="w-full accent-amber-400"
+                />
+              </label>
+              <label className="block">
+                <div className="flex justify-between text-xs text-white/70 mb-1">
+                  <span>Firing speed</span><span className="text-amber-300">{fireRate}/s</span>
+                </div>
+                <input
+                  type="range" min={1} max={12} step={1} value={fireRate}
+                  onChange={(e) => { const v = Number(e.target.value); setFireRate(v); settingsRef.current.fireRatePerSec = v; }}
+                  className="w-full accent-amber-400"
+                />
+              </label>
+            </div>
+
             <div className="flex flex-col gap-4">
+
               <button
                 onClick={() => startGame("learn")}
                 className="group rounded-lg border-2 border-amber-400/70 bg-amber-500/10 hover:bg-amber-500/25 transition px-6 py-5 text-left"

@@ -1,123 +1,96 @@
-# Typing Tower — Learn Mode + Fire Fix
+# Typing Tower — Settings, Ammo Queue & Tuning
 
-## 1. Fix the fire limitation (the "grey target" bug)
+All changes are frontend only, in `src/components/TypingTowerGame.tsx` (plus small
+config defaults in `src/lib/game-config.json`). No backend/schema changes.
 
-Today, pressing a letter sets `enemy.typed = word.length`, which (a) greys the
-label and (b) removes the enemy from the valid-target list (`idx < word.length`
-is false), so you can't fire again until the in-flight bullet resolves.
+## 1. Menu settings (player-configurable)
 
-Fix: decouple **firing** from **word progress**.
-- Single-letter enemies (the whole letter phase): every keypress fires a bullet
-  at the closest *alive* enemy holding that letter. The enemy dies only when a
-  bullet actually hits it. No `typed` gate, no greying, no lock — fire as much as
-  you want.
-- Multi-letter words keep sequential progress (each letter chips one hp), but a
-  missed shot still lets you re-fire that position (refund logic stays).
+Add three controls on the start menu (shown before choosing Learn/Survival),
+stored in a `settingsRef` + React state so they can change live and drive the game:
 
-Result: a living target is always shootable.
+- **Bullet initial speed** — slider, default = current `bulletSpeedBase`. Feeds
+  the normal-bullet speed formula (see §4).
+- **Turret rotation speed** — slider in degrees/sec, **default 60**.
+- **Firing speed** — slider in shots/sec, **default 1**.
 
-## 2. Two modes (start menu)
+Defaults in `game-config.json` updated to match (`turretRotSpeedDeg: 60`,
+`fireRatePerSec: 1`) so the menu opens on those values. The game loop reads these
+from the settings refs instead of the static `config` constants.
 
-A simple start screen: **LEARN** and **SURVIVAL**.
-- **Survival** = today's endless, randomized game, unchanged (kept as-is).
-- **Learn** = the new structured campaign below.
+## 2. "Ammo" queue (fire order, no false misses)
 
-## 3. Learn campaign — letters first (L1 → ~L55)
+Rename/repurpose the existing `pendingShotsRef` into the **Ammo** list:
 
-Alphabetical, because the goal is English letters for a young beginner.
+- Every correct keypress pushes an entry onto Ammo (the target it locked onto).
+- Ammo is fired in order, one shot per firing interval, only after the turret has
+  finished rotating to that target (see §3) — this is already the queue's shape.
+- If an Ammo entry's target is already gone when its turn comes (e.g. destroyed by
+  a special/area shot), it is **silently removed** — never counted as a miss. The
+  rule "if it was there when you pressed, it's not a mistake" holds because the key
+  only enters Ammo when a live matching enemy existed at press time.
 
-Letter schedule (a new letter every 3–4 levels, new one debuts on the first
-level of each block):
-```
-Block 1  L1–4    A B
-Block 2  L5–8    A B C
-Block 3  L9–12   + D
-Block 4  L13–16  + E   ...continues to Z (~L55)
-```
-This matches your example (C arrives at L5).
+## 3. Fire only after the turret aims
 
-**Structured waves, not random.** Each level is a *finite roster* of enemies
-(not an endless stream). The level is cleared only when the whole wave is
-destroyed. Example early ramp:
-```
-L1  ~20 targets, slow
-L2  ~30 targets, slow
-L3  ~35 targets, some faster
-L4  harder (faster, tighter spacing)
-L5  NEW LETTER C — difficulty spike
-```
-Enemy count, speed spread, and enemy-type mix come from a per-level difficulty
-profile — intentional, not luck.
+Bullets must not leave before the barrel points at the target. The loop already
+gates firing on `Math.abs(diff) < 0.08`; this stays and now uses the
+player-selected rotation speed, so with a slow (60°/s) turret the shot clearly
+waits for the barrel to line up.
 
-**Level up only by real mastery, not chance.** Two reinforcing guards:
-1. The newest letter appears on a large share of the debut block's targets
-   (~45%), so you *must* recognize it.
-2. Difficulty is tuned so a player who doesn't know the new letter physically
-   can't clear the wave — enemies carrying the unknown letter pile up, reach the
-   base, and you fail before clearing. So advancement requires actually learning
-   the letters, exactly as you asked.
+## 4. Randomized normal-bullet speed
 
-## 4. Gentler penalties while learning
+Replace the current ±15% jitter with a per-bullet random multiplier in **[1.0,
+1.7]** applied to the chosen initial speed: `launchSpeed = initialSpeed *
+(1 + Math.random() * 0.7)`. Every normal bullet rolls a fresh value. Laser and
+special shots keep their own speed rules.
 
-- Early blocks: short shot-ban on a wrong key (e.g. ~1s), **no instant
-  destruction** from consecutive mistakes.
-- The real pressure comes from the wave itself (letters you don't know breach
-  the base), not from harsh key-punishment.
-- Strictness ramps up in later levels.
+## 5. Press, don't hold
 
-## 5. Words phase (later, small and capped)
+In the keydown handler, ignore auto-repeat: `if (e.repeat) return;`. Holding a key
+does nothing; the player must press again to fire again.
 
-After the alphabet is covered (~L55+), short words appear, growing slowly.
-Curated list of **≤20 simple words total** (no giant random pools).
+## 6. Wrong key → penalty + empty magazine
 
-## 6. Voice + countdown (placeholder now, swappable later)
+On a wrong key (the existing `registerMiss` path), in addition to the current
+penalty/ban, **clear the Ammo queue** (`pendingShotsRef.current = []`) so queued
+shots are lost — the magazine empties.
 
-- **Countdown**: on game/level start, a 3-2-1 overlay plays with the spoken
-  cue **"Ready?"**, then **"Fire!"** as the wave begins.
-- **In-game cues**: **"Destroy!"** at charged/combo moments, **"Good Job!"** on
-  level clear, and a **"New letter: C"** intro moment when a letter unlocks.
-- **Placeholder voice**: the browser's built-in speech (SpeechSynthesis) speaks
-  these English words now, behind a small `playVoice(cue)` layer. Later you drop
-  recorded clips into `public/voice/<cue>.mp3` and they override the placeholder
-  automatically — no code changes needed. (We can also switch to generated
-  studio voices via the backend later.)
+## 7. Tougher combo reward
 
-## 7. Kid-friendly rewards & feedback
+Change the combo/reward trigger in `maybeGrantReward`:
 
-- **New-letter intro moment**: a big celebratory card showing the letter before
-  its block starts.
-- **Praise**: quick "GREAT!" / "NICE!" pop-ups on combos; a **"GOOD JOB!"**
-  celebration with **1–3 stars** on level clear (stars based on accuracy /
-  health remaining) — fast, visible reward to keep an 8-year-old hooked.
-- Keep the juicy explosions, muzzle flashes, and existing special shots.
+- Window: **18 kills within 20 seconds** (was 10 in 10s).
+- Reward duration: **always 5 seconds** (drop the 10s tier).
 
-## 8. Keep your test tweaks
+Everything else about the reward (pierce/explosive pick, voice/boom) stays.
 
-Your increased fire rate and reduced enemy damage stay. Learn mode gets its own
-difficulty numbers so tuning it won't disturb Survival.
+## 8. F, H, G enemies always fast (3× base)
+
+In both spawners (`spawnEnemy` for Survival, `spawnLearnEnemy` for Learn), if the
+target's single letter is F, H, or G, set its speed to **3× the base enemy speed**
+for that mode, overriding the normal speed roll. (Applies to single-letter targets;
+for multi-letter words, applied when the word is exactly that letter.)
+
+## 9. Fixed letter colors
+
+When drawing the label text, color specific letters regardless of state:
+
+- **B → blue**, **R → red**, **Y → yellow**, **G → green**.
+
+Applied per-character in the label draw loop so these letters always render in
+their color (other letters keep the existing typed/active coloring). Chosen tones
+will use readable, vivid hues on the dark label background.
 
 ---
 
 ## Technical notes
 
-- **`src/lib/game-progression.ts`** — rewrite for Learn mode: alphabetical
-  `lettersForLevel` (start A,B; +1 per block), per-level `waveRoster` (count,
-  spawn spacing, speed profile, letter-mix weights favoring the newest letter),
-  curated ≤20-word list + `targetWordLength` starting ~L55. Keep Survival's
-  existing functions intact.
-- **`src/components/TypingTowerGame.tsx`** —
-  - Fire fix: keypress fires at closest alive matching enemy; drop the
-    `typed`-based targeting/greying for single letters.
-  - Add `mode: "menu" | "learn" | "survival"` state + start menu.
-  - Learn loop: spawn from a finite roster, detect wave-clear → level-up flow;
-    fail when health depleted. Survival loop unchanged.
-  - Countdown overlay + level-clear celebration (stars) + new-letter intro.
-  - Gentler penalty table for early Learn levels.
-- **`src/lib/voice.ts`** (new) — `playVoice(cue)`: tries
-  `public/voice/<cue>.mp3`, falls back to SpeechSynthesis. Cues: `ready`,
-  `fire`, `destroy`, `goodjob`, `newletter` (letter interpolated).
-- **`public/voice/`** (new) — folder + short README on dropping in real clips.
-- **`src/lib/game-config.json`** — add Learn-mode tuning fields (early ban ms,
-  star thresholds); keep your firerate/damage values.
-
-No backend/schema changes in this pass.
+- New `settingsRef` (mutable, read in the RAF loop) mirrored by React state for the
+  menu sliders; `spawnBullet`, the rotation step, and `fireInterval` read from it.
+- `game-config.json`: set `turretRotSpeedDeg: 60`, `fireRatePerSec: 1`; keep other
+  keys. `bulletSpeedBase` stays the slider's default.
+- Keydown: add `e.repeat` guard at the top; empty Ammo on miss.
+- Bullet speed: swap jitter block in `spawnBullet` for the [1,1.7] multiplier.
+- Combo: update `killTimesRef` window to 20000ms / threshold 18; fixed 5000ms
+  reward.
+- Fast letters: helper checking `["F","H","G"].includes(letter)` in both spawns.
+- Letter colors: a small map `{B,R,Y,G}` consulted in the per-char label draw.
