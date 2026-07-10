@@ -93,6 +93,13 @@ type Path = {
 let _id = 1;
 const nextId = () => _id++;
 
+// F, H and G targets are always fast. A target counts as a fast-letter word when
+// every character is the same one of these letters (single letter or a repeat).
+const FAST_LETTERS = ["F", "H", "G"];
+function isFastLetterWord(word: string): boolean {
+  return word.length > 0 && FAST_LETTERS.includes(word[0]) && [...word].every((c) => c === word[0]);
+}
+
 function useAudio() {
   const ctxRef = useRef<AudioContext | null>(null);
   const ensure = () => {
