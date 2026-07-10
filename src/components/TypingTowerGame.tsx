@@ -424,6 +424,9 @@ export default function TypingTowerGame() {
 
     if (kind !== "tank" && Math.random() < 0.14) speed *= 1.9 + Math.random() * 1.3;
 
+    // F, H and G are always fast: 3x the base enemy speed.
+    if (isFastLetterWord(word)) speed = config.enemySpeedMin * mul * 3;
+
     const half = config.pathWidth / 2 - radius - 2;
     const lane = half > 0 ? (Math.random() * 2 - 1) * half : 0;
 
