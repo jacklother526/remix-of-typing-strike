@@ -720,6 +720,8 @@ export default function TypingTowerGame() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Ignore auto-repeat from holding a key: the player must press to fire.
+      if (e.repeat) return;
       if (gameOverRef.current) {
         if (e.key === "Enter") startGame(modeRef.current === "survival" ? "survival" : "learn");
         return;
