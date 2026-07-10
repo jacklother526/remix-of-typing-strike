@@ -1237,7 +1237,10 @@ export default function TypingTowerGame() {
         const midY = by + bh / 2 + 1;
         for (let i = 0; i < label.length; i++) {
           const ch = label[i];
-          ctx.fillStyle = i < en.typed ? "rgba(255,255,255,0.28)" : (isActive ? "#ffd966" : "#ffe066");
+          const fixed = LETTER_COLORS[ch];
+          if (i < en.typed) ctx.fillStyle = "rgba(255,255,255,0.28)";
+          else if (fixed) ctx.fillStyle = fixed;
+          else ctx.fillStyle = isActive ? "#ffd966" : "#ffe066";
           ctx.fillText(ch, cursorX, midY);
           cursorX += ctx.measureText(ch).width;
         }
